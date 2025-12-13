@@ -17,8 +17,7 @@ static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 async fn start_recording(app: AppHandle, api_key: String) -> Result<(), String> {
     IS_RECORDING.store(true, Ordering::SeqCst);
     app.emit("recording-state", true).ok();
-
-    show_floating_window(&app)?;
+    expand_floating_window(&app)?;
     realtime::start_session(app, api_key).await
 }
 
@@ -28,7 +27,7 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     app.emit("recording-state", false).ok();
 
     let transcript = realtime::stop_session(&app).await?;
-    hide_floating_window(&app)?;
+    collapse_floating_window(&app)?;
 
     if !transcript.is_empty() {
         copy_and_paste(app, transcript).await?;
@@ -113,14 +112,21 @@ fn get_recording_state() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
 }
 
-fn show_floating_window(app: &AppHandle) -> Result<(), String> {
+#[tauri::command]
+fn set_floating_x(app: AppHandle, x: f64) {
+    if let Some(window) = app.get_webview_window("floating") {
+        window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y: 8.0 })).ok();
+    }
+}
+
+fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window("floating").is_some() {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
+    let window = WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
         .title("Whisper")
-        .inner_size(320.0, 120.0)
+        .inner_size(44.0, 44.0)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -130,12 +136,27 @@ fn show_floating_window(app: &AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let screen_width = monitor.size().width as f64 / monitor.scale_factor();
+        let x = (screen_width - 44.0) / 2.0;
+        window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y: 8.0 })).ok();
+    }
+
     Ok(())
 }
 
-fn hide_floating_window(app: &AppHandle) -> Result<(), String> {
+fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
-        window.close().map_err(|e| e.to_string())?;
+        window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: 340.0, height: 50.0 })).ok();
+        app.emit("floating-expanded", true).ok();
+    }
+    Ok(())
+}
+
+fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("floating") {
+        window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: 44.0, height: 44.0 })).ok();
+        app.emit("floating-expanded", false).ok();
     }
     Ok(())
 }
@@ -183,9 +204,11 @@ pub fn run() {
             copy_and_paste,
             register_shortcut,
             get_recording_state,
+            set_floating_x,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
+            create_floating_window(app.handle()).ok();
             Ok(())
         })
         .run(tauri::generate_context!())

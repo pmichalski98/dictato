@@ -199,9 +199,11 @@ pub async fn start_session(app: AppHandle, api_key: String) -> Result<(), String
                             }
                             "input_audio_buffer.speech_started" => {
                                 println!("[Realtime] Speech detected!");
+                                app_read.emit("speech-started", ()).ok();
                             }
                             "input_audio_buffer.speech_stopped" => {
                                 println!("[Realtime] Speech ended");
+                                app_read.emit("speech-stopped", ()).ok();
                             }
                             "error" => {
                                 if let Some(err) = event.error {

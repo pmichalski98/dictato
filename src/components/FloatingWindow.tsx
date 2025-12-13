@@ -1,20 +1,58 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./FloatingWindow.css";
 
 const TARGET_SAMPLE_RATE = 24000;
 
 export function FloatingWindow() {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [transcription, setTranscription] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartX = useRef(0);
+  const windowStartX = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const transcriptionRef = useRef("");
 
+  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest(".stop-btn")) return;
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartX.current = e.screenX;
+    const pos = await getCurrentWindow().outerPosition();
+    windowStartX.current = pos.x;
+  }, []);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.screenX - dragStartX.current;
+      const newX = windowStartX.current + deltaX;
+      invoke("set_floating_x", { x: newX });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging]);
+
   const startAudioCapture = useCallback(async () => {
+    if (audioContextRef.current) return;
     try {
       console.log("[FloatingWindow] Starting audio capture...");
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -52,7 +90,7 @@ export function FloatingWindow() {
       console.log("[FloatingWindow] Audio capture started!");
     } catch (err) {
       console.error("[FloatingWindow] Failed to start audio:", err);
-      setError("Microphone access denied");
+      setError("Mic denied");
     }
   }, []);
 
@@ -66,49 +104,50 @@ export function FloatingWindow() {
   }, []);
 
   useEffect(() => {
-    startAudioCapture();
-    return () => stopAudioCapture();
-  }, [startAudioCapture, stopAudioCapture]);
-
-  useEffect(() => {
-    const unlistenTranscript = listen<string>(
-      "transcription-update",
-      (event) => {
-        console.log("Transcription update:", event.payload);
-        setTranscription(event.payload);
-        transcriptionRef.current = event.payload;
+    const unlistenExpanded = listen<boolean>("floating-expanded", (event) => {
+      setIsExpanded(event.payload);
+      if (event.payload) {
+        setTranscription("");
+        transcriptionRef.current = "";
         setError(null);
+        startAudioCapture();
+      } else {
+        stopAudioCapture();
+        setIsSpeaking(false);
       }
-    );
+    });
+
+    const unlistenTranscript = listen<string>("transcription-update", (event) => {
+      setTranscription(event.payload);
+      transcriptionRef.current = event.payload;
+      setError(null);
+    });
 
     const unlistenConnection = listen<boolean>("connection-state", (event) => {
-      console.log("Connection state:", event.payload);
       setIsConnected(event.payload);
     });
 
     const unlistenError = listen<string>("transcription-error", (event) => {
-      console.error("Transcription error:", event.payload);
       setError(event.payload);
     });
 
-    const unlistenRecording = listen<boolean>("recording-state", async (event) => {
-      if (!event.payload && transcriptionRef.current) {
-        console.log("Recording stopped, copying:", transcriptionRef.current);
-        try {
-          await invoke("copy_and_paste", { text: transcriptionRef.current });
-        } catch (err) {
-          console.error("Failed to copy and paste:", err);
-        }
-      }
+    const unlistenSpeechStart = listen("speech-started", () => {
+      setIsSpeaking(true);
+    });
+
+    const unlistenSpeechStop = listen("speech-stopped", () => {
+      setIsSpeaking(false);
     });
 
     return () => {
+      unlistenExpanded.then((fn) => fn());
       unlistenTranscript.then((fn) => fn());
       unlistenConnection.then((fn) => fn());
       unlistenError.then((fn) => fn());
-      unlistenRecording.then((fn) => fn());
+      unlistenSpeechStart.then((fn) => fn());
+      unlistenSpeechStop.then((fn) => fn());
     };
-  }, []);
+  }, [startAudioCapture, stopAudioCapture]);
 
   const handleStop = async () => {
     try {
@@ -118,27 +157,34 @@ export function FloatingWindow() {
     }
   };
 
-  return (
-    <div className="floating-container">
-      <div className="status-bar">
-        <div className="status-left">
-          <div className="recording-dot pulsing" />
-          <span className="status-text">
-            {error ? "Error" : isConnected ? "Listening..." : "Connecting..."}
-          </span>
-        </div>
-        <button className="stop-btn" onClick={handleStop}>
-          Stop
-        </button>
+  const getDisplayText = () => {
+    if (error) return error;
+    if (transcription) return transcription;
+    if (!isConnected) return "Connecting...";
+    return "Listening...";
+  };
+
+  if (!isExpanded) {
+    return (
+      <div className="floating-container collapsed" onMouseDown={handleMouseDown}>
+        <div className="collapsed-orb" />
       </div>
-      <div className="transcription-area">
-        {error ? (
-          <span className="error-text">{error}</span>
-        ) : transcription ? (
-          transcription
-        ) : (
-          <span className="placeholder">Start speaking...</span>
-        )}
+    );
+  }
+
+  return (
+    <div className="floating-container expanded" onMouseDown={handleMouseDown}>
+      <div className="indicator">
+        <div className={`orb-container ${isSpeaking ? "speaking" : ""}`}>
+          <div className={`orb ${isSpeaking ? "speaking" : ""} ${error ? "error" : ""}`} />
+          <div className="ring" />
+          <div className="ring" />
+          <div className="ring" />
+        </div>
+        <span className={`transcript-text ${error ? "error" : ""} ${!transcription ? "placeholder" : ""}`}>
+          {getDisplayText()}
+        </span>
+        <button className="stop-btn" onClick={handleStop} title="Stop recording" />
       </div>
     </div>
   );
