@@ -7,6 +7,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
@@ -196,6 +197,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(RealtimeState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -207,6 +209,10 @@ pub fn run() {
             set_floating_x,
         ])
         .setup(|app| {
+            use tauri_plugin_autostart::ManagerExt;
+            let autostart = app.autolaunch();
+            let _ = autostart.enable();
+            
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
             Ok(())
