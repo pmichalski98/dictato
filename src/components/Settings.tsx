@@ -1,21 +1,25 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, Provider } from "../hooks/useSettings";
 import { useRealtimeTranscription } from "../hooks/useRealtimeTranscription";
 import "./Settings.css";
 
 export function Settings() {
-  const { settings, isLoading, updateApiKey, updateShortcut } = useSettings();
+  const { settings, isLoading, updateApiKey, updateGroqApiKey, updateProvider, updateLanguage, updateShortcut } = useSettings();
   const [localApiKey, setLocalApiKey] = useState("");
+  const [localGroqApiKey, setLocalGroqApiKey] = useState("");
   const [localShortcut, setLocalShortcut] = useState("");
   const [isCapturing, setIsCapturing] = useState(false);
   const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [groqStatus, setGroqStatus] = useState<"idle" | "saved" | "error">("idle");
 
-  const { isRecording, toggleRecording } = useRealtimeTranscription(settings.apiKey);
+  const currentApiKey = settings.provider === "openai" ? settings.apiKey : settings.groqApiKey;
+  const { isRecording, toggleRecording } = useRealtimeTranscription(currentApiKey, settings.provider);
 
   useEffect(() => {
     if (!isLoading) {
       setLocalApiKey(settings.apiKey);
+      setLocalGroqApiKey(settings.groqApiKey);
       setLocalShortcut(settings.shortcut);
     }
   }, [isLoading, settings]);
@@ -35,6 +39,20 @@ export function Settings() {
       setStatus("error");
     }
   }, [localApiKey, updateApiKey]);
+
+  const handleSaveGroqApiKey = useCallback(async () => {
+    try {
+      await updateGroqApiKey(localGroqApiKey);
+      setGroqStatus("saved");
+      setTimeout(() => setGroqStatus("idle"), 2000);
+    } catch {
+      setGroqStatus("error");
+    }
+  }, [localGroqApiKey, updateGroqApiKey]);
+
+  const handleProviderChange = useCallback((provider: Provider) => {
+    updateProvider(provider);
+  }, [updateProvider]);
 
   const handleCaptureShortcut = useCallback((e: React.KeyboardEvent) => {
     e.preventDefault();
@@ -74,6 +92,49 @@ export function Settings() {
 
       <div className="settings-section">
         <label className="settings-label">
+          <span>Transcription Provider</span>
+          <div className="input-group">
+            <select
+              value={settings.provider}
+              onChange={(e) => handleProviderChange(e.target.value as Provider)}
+              className="settings-input"
+            >
+              <option value="openai">OpenAI (live streaming)</option>
+              <option value="groq">Groq Whisper Turbo (faster)</option>
+            </select>
+          </div>
+        </label>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">
+          <span>Language</span>
+          <div className="input-group">
+            <select
+              value={settings.language}
+              onChange={(e) => updateLanguage(e.target.value)}
+              className="settings-input"
+            >
+              <option value="en">English</option>
+              <option value="pl">Polish</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="nl">Dutch</option>
+              <option value="ja">Japanese</option>
+              <option value="zh">Chinese</option>
+              <option value="ko">Korean</option>
+              <option value="ru">Russian</option>
+              <option value="uk">Ukrainian</option>
+            </select>
+          </div>
+        </label>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">
           <span>OpenAI API Key</span>
           <div className="input-group">
             <input
@@ -84,7 +145,25 @@ export function Settings() {
               className="settings-input"
             />
             <button onClick={handleSaveApiKey} className="btn-primary">
-              {status === "saved" ? "✓ Saved" : "Save"}
+              {status === "saved" ? "Saved" : "Save"}
+            </button>
+          </div>
+        </label>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">
+          <span>Groq API Key</span>
+          <div className="input-group">
+            <input
+              type="password"
+              value={localGroqApiKey}
+              onChange={(e) => setLocalGroqApiKey(e.target.value)}
+              placeholder="gsk_..."
+              className="settings-input"
+            />
+            <button onClick={handleSaveGroqApiKey} className="btn-primary">
+              {groqStatus === "saved" ? "Saved" : "Save"}
             </button>
           </div>
         </label>
@@ -120,7 +199,7 @@ export function Settings() {
           <button
             onClick={toggleRecording}
             className={`btn-record ${isRecording ? "active" : ""}`}
-            disabled={!settings.apiKey}
+            disabled={!currentApiKey}
           >
             {isRecording ? "Stop" : "Test Recording"}
           </button>

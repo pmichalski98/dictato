@@ -11,6 +11,7 @@ export function FloatingWindow() {
   const [transcription, setTranscription] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragStartX = useRef(0);
@@ -110,10 +111,12 @@ export function FloatingWindow() {
         setTranscription("");
         transcriptionRef.current = "";
         setError(null);
+        setIsProcessing(false);
         startAudioCapture();
       } else {
         stopAudioCapture();
         setIsSpeaking(false);
+        setIsProcessing(false);
       }
     });
 
@@ -139,6 +142,10 @@ export function FloatingWindow() {
       setIsSpeaking(false);
     });
 
+    const unlistenProcessing = listen<boolean>("processing-state", (event) => {
+      setIsProcessing(event.payload);
+    });
+
     return () => {
       unlistenExpanded.then((fn) => fn());
       unlistenTranscript.then((fn) => fn());
@@ -146,6 +153,7 @@ export function FloatingWindow() {
       unlistenError.then((fn) => fn());
       unlistenSpeechStart.then((fn) => fn());
       unlistenSpeechStop.then((fn) => fn());
+      unlistenProcessing.then((fn) => fn());
     };
   }, [startAudioCapture, stopAudioCapture]);
 
@@ -159,6 +167,7 @@ export function FloatingWindow() {
 
   const getDisplayText = () => {
     if (error) return error;
+    if (isProcessing) return "Processing...";
     if (transcription) return transcription;
     if (!isConnected) return "Connecting...";
     return "Listening...";
