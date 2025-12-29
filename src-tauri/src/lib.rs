@@ -210,18 +210,19 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     let window =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
             .title("Whisper")
-            .inner_size(44.0, 44.0)
+            .inner_size(300.0, 50.0)
             .decorations(false)
             .always_on_top(true)
             .skip_taskbar(true)
             .resizable(false)
             .focused(false)
+            .visible(false)
             .build()
             .map_err(|e| e.to_string())?;
 
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let screen_width = monitor.size().width as f64 / monitor.scale_factor();
-        let x = (screen_width - 44.0) / 2.0;
+        let x = (screen_width - 300.0) / 2.0;
         window
             .set_position(tauri::Position::Logical(tauri::LogicalPosition {
                 x,
@@ -235,12 +236,7 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
 
 fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
-        window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize {
-                width: 340.0,
-                height: 50.0,
-            }))
-            .ok();
+        window.show().ok();
         app.emit("floating-expanded", true).ok();
     }
     Ok(())
@@ -248,12 +244,7 @@ fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
 
 fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
-        window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize {
-                width: 44.0,
-                height: 44.0,
-            }))
-            .ok();
+        window.hide().ok();
         app.emit("floating-expanded", false).ok();
     }
     Ok(())

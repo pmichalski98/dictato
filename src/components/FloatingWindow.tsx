@@ -1,59 +1,93 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import "./FloatingWindow.css";
 
 const TARGET_SAMPLE_RATE = 24000;
+const BAR_COUNT = 24;
+const MIN_BAR_HEIGHT = 4;
+const MAX_BAR_HEIGHT = 28;
 
 export function FloatingWindow() {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [transcription, setTranscription] = useState("");
-  const [isConnected, setIsConnected] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isActive, setIsActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartX = useRef(0);
-  const windowStartX = useRef(0);
+  const [barHeights, setBarHeights] = useState<number[]>(
+    Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
+  );
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const transcriptionRef = useRef("");
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const isStartingRef = useRef(false);
 
-  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".stop-btn")) return;
-    e.preventDefault();
-    setIsDragging(true);
-    dragStartX.current = e.screenX;
-    const pos = await getCurrentWindow().outerPosition();
-    windowStartX.current = pos.x;
+  const updateBars = useCallback(() => {
+    if (!analyserRef.current) return;
+
+    const analyser = analyserRef.current;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(dataArray);
+
+    const newHeights: number[] = [];
+    const binSize = Math.floor(dataArray.length / BAR_COUNT);
+
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const start = i * binSize;
+      const end = start + binSize;
+      let sum = 0;
+      for (let j = start; j < end; j++) {
+        sum += dataArray[j];
+      }
+      const avg = sum / binSize;
+      const height =
+        MIN_BAR_HEIGHT + (avg / 255) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
+      newHeights.push(height);
+    }
+
+    setBarHeights(newHeights);
+    animationFrameRef.current = requestAnimationFrame(updateBars);
   }, []);
 
-  useEffect(() => {
-    if (!isDragging) return;
+  const stopAudioCapture = useCallback(() => {
+    // Cancel animation frame first
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = e.screenX - dragStartX.current;
-      const newX = windowStartX.current + deltaX;
-      invoke("set_floating_x", { x: newX });
-    };
+    // Disconnect nodes in reverse connection order
+    workletNodeRef.current?.disconnect();
+    workletNodeRef.current = null;
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
+    analyserRef.current?.disconnect();
+    analyserRef.current = null;
 
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
+    sourceNodeRef.current?.disconnect();
+    sourceNodeRef.current = null;
 
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isDragging]);
+    // Stop media tracks before closing context
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+
+    // Close audio context (fire and forget, but log errors)
+    const ctx = audioContextRef.current;
+    audioContextRef.current = null;
+    if (ctx && ctx.state !== "closed") {
+      ctx.close().catch((err) => {
+        console.error("[FloatingWindow] Error closing AudioContext:", err);
+      });
+    }
+
+    setBarHeights(Array(BAR_COUNT).fill(MIN_BAR_HEIGHT));
+  }, []);
 
   const startAudioCapture = useCallback(async () => {
-    if (audioContextRef.current) return;
+    // Guard against concurrent starts
+    if (audioContextRef.current || isStartingRef.current) return;
+    isStartingRef.current = true;
+
     try {
       console.log("[FloatingWindow] Starting audio capture...");
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -69,9 +103,17 @@ export function FloatingWindow() {
       const audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
       audioContextRef.current = audioContext;
 
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.7;
+      analyserRef.current = analyser;
+
       await audioContext.audioWorklet.addModule("/audio-processor.js");
       const source = audioContext.createMediaStreamSource(stream);
+      sourceNodeRef.current = source;
+
       const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
+      workletNodeRef.current = workletNode;
 
       workletNode.port.onmessage = async (event) => {
         if (event.data.type === "audio") {
@@ -85,61 +127,38 @@ export function FloatingWindow() {
         }
       };
 
-      source.connect(workletNode);
+      source.connect(analyser);
+      analyser.connect(workletNode);
       workletNode.connect(audioContext.destination);
-      workletNodeRef.current = workletNode;
+
+      animationFrameRef.current = requestAnimationFrame(updateBars);
+
       console.log("[FloatingWindow] Audio capture started!");
     } catch (err) {
       console.error("[FloatingWindow] Failed to start audio:", err);
       setError("Mic denied");
+      // Clean up any partial initialization
+      stopAudioCapture();
+    } finally {
+      isStartingRef.current = false;
     }
-  }, []);
-
-  const stopAudioCapture = useCallback(() => {
-    workletNodeRef.current?.disconnect();
-    audioContextRef.current?.close();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    workletNodeRef.current = null;
-    audioContextRef.current = null;
-    streamRef.current = null;
-  }, []);
+  }, [updateBars, stopAudioCapture]);
 
   useEffect(() => {
     const unlistenExpanded = listen<boolean>("floating-expanded", (event) => {
-      setIsExpanded(event.payload);
+      setIsActive(event.payload);
       if (event.payload) {
-        setTranscription("");
-        transcriptionRef.current = "";
         setError(null);
         setIsProcessing(false);
         startAudioCapture();
       } else {
         stopAudioCapture();
-        setIsSpeaking(false);
         setIsProcessing(false);
       }
     });
 
-    const unlistenTranscript = listen<string>("transcription-update", (event) => {
-      setTranscription(event.payload);
-      transcriptionRef.current = event.payload;
-      setError(null);
-    });
-
-    const unlistenConnection = listen<boolean>("connection-state", (event) => {
-      setIsConnected(event.payload);
-    });
-
     const unlistenError = listen<string>("transcription-error", (event) => {
       setError(event.payload);
-    });
-
-    const unlistenSpeechStart = listen("speech-started", () => {
-      setIsSpeaking(true);
-    });
-
-    const unlistenSpeechStop = listen("speech-stopped", () => {
-      setIsSpeaking(false);
     });
 
     const unlistenProcessing = listen<boolean>("processing-state", (event) => {
@@ -147,53 +166,41 @@ export function FloatingWindow() {
     });
 
     return () => {
+      // Clean up audio resources on unmount
+      stopAudioCapture();
       unlistenExpanded.then((fn) => fn());
-      unlistenTranscript.then((fn) => fn());
-      unlistenConnection.then((fn) => fn());
       unlistenError.then((fn) => fn());
-      unlistenSpeechStart.then((fn) => fn());
-      unlistenSpeechStop.then((fn) => fn());
       unlistenProcessing.then((fn) => fn());
     };
   }, [startAudioCapture, stopAudioCapture]);
 
-  const handleStop = async () => {
-    try {
-      await invoke("stop_recording");
-    } catch (err) {
-      console.error("Failed to stop:", err);
-    }
-  };
-
-  const getDisplayText = () => {
-    if (error) return error;
-    if (isProcessing) return "Processing...";
-    if (transcription) return transcription;
-    if (!isConnected) return "Connecting...";
-    return "Listening...";
-  };
-
-  if (!isExpanded) {
-    return (
-      <div className="floating-container collapsed" onMouseDown={handleMouseDown}>
-        <div className="collapsed-orb" />
-      </div>
-    );
+  if (!isActive) {
+    return null;
   }
 
   return (
-    <div className="floating-container expanded" onMouseDown={handleMouseDown}>
-      <div className="indicator">
-        <div className={`orb-container ${isSpeaking ? "speaking" : ""}`}>
-          <div className={`orb ${isSpeaking ? "speaking" : ""} ${error ? "error" : ""}`} />
-          <div className="ring" />
-          <div className="ring" />
-          <div className="ring" />
-        </div>
-        <span className={`transcript-text ${error ? "error" : ""} ${!transcription ? "placeholder" : ""}`}>
-          {getDisplayText()}
-        </span>
-        <button className="stop-btn" onClick={handleStop} title="Stop recording" />
+    <div className="w-full h-full flex items-center justify-center bg-transparent select-none">
+      <div className="flex items-center gap-3 px-4 py-2 bg-black/90 rounded-full border border-white/10 backdrop-blur-xl animate-fade-in">
+        {isProcessing ? (
+          <>
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white/90 rounded-full animate-spin" />
+            <span className="text-sm text-white/60 font-medium">
+              Transcribing...
+            </span>
+          </>
+        ) : error ? (
+          <span className="text-sm text-red-400 font-medium">{error}</span>
+        ) : (
+          <div className="flex items-center gap-[2px] h-8">
+            {barHeights.map((height, i) => (
+              <div
+                key={i}
+                className="w-[3px] bg-white/90 rounded-full"
+                style={{ height: `${height}px` }}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
