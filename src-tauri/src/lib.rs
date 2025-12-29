@@ -43,7 +43,10 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     IS_RECORDING.store(false, Ordering::SeqCst);
     app.emit("recording-state", false).ok();
 
-    let provider = CURRENT_PROVIDER.read().map(|p| p.clone()).unwrap_or_default();
+    let provider = CURRENT_PROVIDER
+        .read()
+        .map(|p| p.clone())
+        .unwrap_or_default();
 
     let transcript = if provider == "groq" {
         let groq_state = app.state::<GroqState>();
@@ -76,7 +79,10 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> {
     if IS_RECORDING.load(Ordering::SeqCst) {
-        let provider = CURRENT_PROVIDER.read().map(|p| p.clone()).unwrap_or_default();
+        let provider = CURRENT_PROVIDER
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_default();
         if provider == "groq" {
             let groq_state = app.state::<GroqState>();
             if let Err(e) = groq_state.append_audio(audio) {
@@ -92,7 +98,9 @@ async fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> 
 
 #[tauri::command]
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
-    app.clipboard().write_text(&text).map_err(|e| e.to_string())?;
+    app.clipboard()
+        .write_text(&text)
+        .map_err(|e| e.to_string())?;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -156,7 +164,9 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
 
 fn get_store_string(app: &AppHandle, key: &str) -> Option<String> {
     let store = app.store("settings.json").ok()?;
-    store.get(key).and_then(|v| v.as_str().map(|s| s.to_string()))
+    store
+        .get(key)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
 fn get_api_key_from_store(app: &AppHandle) -> Option<String> {
@@ -183,7 +193,12 @@ fn get_recording_state() -> bool {
 #[tauri::command]
 fn set_floating_x(app: AppHandle, x: f64) {
     if let Some(window) = app.get_webview_window("floating") {
-        window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y: 8.0 })).ok();
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x,
+                y: 8.0,
+            }))
+            .ok();
     }
 }
 
@@ -192,22 +207,27 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
-        .title("Whisper")
-        .inner_size(44.0, 44.0)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .focused(false)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let window =
+        WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
+            .title("Whisper")
+            .inner_size(44.0, 44.0)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .focused(false)
+            .build()
+            .map_err(|e| e.to_string())?;
 
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let screen_width = monitor.size().width as f64 / monitor.scale_factor();
         let x = (screen_width - 44.0) / 2.0;
-        window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y: 8.0 })).ok();
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x,
+                y: 8.0,
+            }))
+            .ok();
     }
 
     Ok(())
@@ -215,7 +235,12 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
 
 fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
-        window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: 340.0, height: 50.0 })).ok();
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 340.0,
+                height: 50.0,
+            }))
+            .ok();
         app.emit("floating-expanded", true).ok();
     }
     Ok(())
@@ -223,7 +248,12 @@ fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
 
 fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
-        window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: 44.0, height: 44.0 })).ok();
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 44.0,
+                height: 44.0,
+            }))
+            .ok();
         app.emit("floating-expanded", false).ok();
     }
     Ok(())
@@ -264,7 +294,10 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(RealtimeState::default())
         .manage(GroqState::default())
         .invoke_handler(tauri::generate_handler![
@@ -280,7 +313,7 @@ pub fn run() {
             use tauri_plugin_autostart::ManagerExt;
             let autostart = app.autolaunch();
             let _ = autostart.enable();
-            
+
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
             Ok(())

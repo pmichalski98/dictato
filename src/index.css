@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", Inter, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* Colors */
+  --color-background: #0a0a0f;
+  --color-foreground: #e4e4e7;
+  --color-input: #18181b;
+  --color-border: #27272a;
+  --color-ring: #8b5cf6;
+  --color-primary: #8b5cf6;
+  --color-primary-foreground: #ffffff;
+  --color-muted: #3f3f46;
+  --color-muted-foreground: #a1a1aa;
+  --color-secondary: #ec4899;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fca5a5;
+
+  /* Animation */
+  --animate-pulse-border: pulse-border 2s ease-in-out infinite;
+
+  @keyframes pulse-border {
+    0%,
+    100% {
+      border-color: var(--color-secondary);
+    }
+    50% {
+      border-color: var(--color-ring);
+    }
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Custom dropdown arrow for selects */
+select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
