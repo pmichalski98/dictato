@@ -289,6 +289,8 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(RealtimeState::default())
         .manage(GroqState::default())
         .invoke_handler(tauri::generate_handler![
