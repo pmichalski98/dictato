@@ -20,6 +20,7 @@
 
   /* Animation */
   --animate-pulse-border: pulse-border 2s ease-in-out infinite;
+  --animate-fade-in: fade-in 0.2s ease-out;
 
   @keyframes pulse-border {
     0%,
@@ -28,6 +29,17 @@
     }
     50% {
       border-color: var(--color-ring);
+    }
+  }
+
+  @keyframes fade-in {
+    0% {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
     }
   }
 }
