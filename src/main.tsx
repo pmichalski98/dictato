@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { FloatingWindow } from "./components/FloatingWindow";
+import "./index.css";
 
 const params = new URLSearchParams(window.location.search);
 const windowType = params.get("window");
