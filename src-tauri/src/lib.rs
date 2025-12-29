@@ -1,8 +1,11 @@
+mod groq;
 mod realtime;
 
 use enigo::{Enigo, Key, Keyboard, Settings};
+use groq::GroqState;
 use realtime::RealtimeState;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
@@ -13,13 +16,26 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
 
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
+static CURRENT_PROVIDER: RwLock<String> = RwLock::new(String::new());
 
 #[tauri::command]
-async fn start_recording(app: AppHandle, api_key: String) -> Result<(), String> {
+async fn start_recording(app: AppHandle, api_key: String, provider: String) -> Result<(), String> {
     IS_RECORDING.store(true, Ordering::SeqCst);
+
+    if let Ok(mut p) = CURRENT_PROVIDER.write() {
+        *p = provider.clone();
+    }
+
     app.emit("recording-state", true).ok();
     expand_floating_window(&app)?;
-    realtime::start_session(app, api_key).await
+
+    if provider == "groq" {
+        let groq_state = app.state::<GroqState>();
+        groq_state.clear_buffer();
+        Ok(())
+    } else {
+        realtime::start_session(app, api_key).await
+    }
 }
 
 #[tauri::command]
@@ -27,7 +43,27 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     IS_RECORDING.store(false, Ordering::SeqCst);
     app.emit("recording-state", false).ok();
 
-    let transcript = realtime::stop_session(&app).await?;
+    let provider = CURRENT_PROVIDER.read().map(|p| p.clone()).unwrap_or_default();
+
+    let transcript = if provider == "groq" {
+        let groq_state = app.state::<GroqState>();
+        let audio_data = groq_state.get_buffer()?;
+        groq_state.clear_buffer();
+
+        let api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
+        let language = get_language_from_store(&app);
+        if audio_data.is_empty() || api_key.is_empty() {
+            String::new()
+        } else {
+            app.emit("processing-state", true).ok();
+            let result = groq::transcribe(&api_key, audio_data, &language).await;
+            app.emit("processing-state", false).ok();
+            result?
+        }
+    } else {
+        realtime::stop_session(&app).await?
+    };
+
     collapse_floating_window(&app)?;
 
     if !transcript.is_empty() {
@@ -40,7 +76,16 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> {
     if IS_RECORDING.load(Ordering::SeqCst) {
-        realtime::send_audio(&app, audio).await?;
+        let provider = CURRENT_PROVIDER.read().map(|p| p.clone()).unwrap_or_default();
+        if provider == "groq" {
+            let groq_state = app.state::<GroqState>();
+            if let Err(e) = groq_state.append_audio(audio) {
+                app.emit("transcription-error", &e).ok();
+                return Err(e);
+            }
+        } else {
+            realtime::send_audio(&app, audio).await?;
+        }
     }
     Ok(())
 }
@@ -49,7 +94,7 @@ async fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> 
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     app.clipboard().write_text(&text).map_err(|e| e.to_string())?;
 
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
 
@@ -87,13 +132,19 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                         eprintln!("Failed to stop recording: {}", e);
                     }
                 } else {
-                    let api_key = get_api_key_from_store(&app);
+                    let provider = get_provider_from_store(&app);
+                    let api_key = if provider == "groq" {
+                        get_groq_api_key_from_store(&app)
+                    } else {
+                        get_api_key_from_store(&app)
+                    };
+
                     if let Some(key) = api_key {
-                        if let Err(e) = start_recording(app, key).await {
+                        if let Err(e) = start_recording(app, key, provider).await {
                             eprintln!("Failed to start recording: {}", e);
                         }
                     } else {
-                        eprintln!("No API key configured");
+                        eprintln!("No API key configured for provider: {}", provider);
                     }
                 }
             });
@@ -103,9 +154,25 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
     Ok(())
 }
 
-fn get_api_key_from_store(app: &AppHandle) -> Option<String> {
+fn get_store_string(app: &AppHandle, key: &str) -> Option<String> {
     let store = app.store("settings.json").ok()?;
-    store.get("apiKey").and_then(|v| v.as_str().map(|s| s.to_string()))
+    store.get(key).and_then(|v| v.as_str().map(|s| s.to_string()))
+}
+
+fn get_api_key_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, "apiKey")
+}
+
+fn get_groq_api_key_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, "groqApiKey")
+}
+
+fn get_provider_from_store(app: &AppHandle) -> String {
+    get_store_string(app, "provider").unwrap_or_else(|| "openai".to_string())
+}
+
+fn get_language_from_store(app: &AppHandle) -> String {
+    get_store_string(app, "language").unwrap_or_else(|| "en".to_string())
 }
 
 #[tauri::command]
@@ -199,6 +266,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(RealtimeState::default())
+        .manage(GroqState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
