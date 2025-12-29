@@ -21,10 +21,6 @@ const DEFAULT_SETTINGS: Settings = {
 
 const store = new LazyStore("settings.json");
 
-async function getStore() {
-  return store;
-}
-
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,7 +28,6 @@ export function useSettings() {
   useEffect(() => {
     async function loadSettings() {
       try {
-        const store = await getStore();
         const apiKey = await store.get<string>("apiKey");
         const groqApiKey = await store.get<string>("groqApiKey");
         const provider = await store.get<Provider>("provider");
@@ -58,7 +53,6 @@ export function useSettings() {
 
   const updateApiKey = useCallback(async (apiKey: string) => {
     try {
-      const store = await getStore();
       await store.set("apiKey", apiKey);
       setSettings((prev) => ({ ...prev, apiKey }));
     } catch (err) {
@@ -68,7 +62,6 @@ export function useSettings() {
 
   const updateShortcut = useCallback(async (shortcut: string) => {
     try {
-      const store = await getStore();
       await store.set("shortcut", shortcut);
       setSettings((prev) => ({ ...prev, shortcut }));
     } catch (err) {
@@ -78,7 +71,6 @@ export function useSettings() {
 
   const updateGroqApiKey = useCallback(async (groqApiKey: string) => {
     try {
-      const store = await getStore();
       await store.set("groqApiKey", groqApiKey);
       setSettings((prev) => ({ ...prev, groqApiKey }));
     } catch (err) {
@@ -88,7 +80,6 @@ export function useSettings() {
 
   const updateProvider = useCallback(async (provider: Provider) => {
     try {
-      const store = await getStore();
       await store.set("provider", provider);
       setSettings((prev) => ({ ...prev, provider }));
     } catch (err) {
@@ -98,7 +89,6 @@ export function useSettings() {
 
   const updateLanguage = useCallback(async (language: string) => {
     try {
-      const store = await getStore();
       await store.set("language", language);
       setSettings((prev) => ({ ...prev, language }));
     } catch (err) {
