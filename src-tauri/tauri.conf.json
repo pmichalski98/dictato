@@ -3,6 +3,14 @@
   "productName": "whisper-clone",
   "version": "0.1.0",
   "identifier": "com.whisper.clone",
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/pmichalski98/super-whisper-clone/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3QkUwMTk2QjJDMUY1RjgKUldUNDljR3lsZ0crTnc2UEhhK1JIajlMSzlZN3R3SnowcHpWL0NzRnQyMVpnVXg0bWdPMmgvOXEK"
+    }
+  },
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
