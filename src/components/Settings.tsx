@@ -3,6 +3,7 @@ import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useSettings } from "../hooks/useSettings";
 import { Button } from "./ui/button";
+import { Card } from "./ui/card";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select } from "./ui/select";
@@ -329,162 +330,170 @@ export function Settings() {
         </p>
       </header>
 
-      <div className="space-y-6 flex-1">
-        {/* Language */}
-        <div className="space-y-2">
-          <Label>Language</Label>
-          <Select
-            value={settings.language}
-            onChange={(e) => updateLanguage(e.target.value)}
-          >
-            {SUPPORTED_LANGUAGES.map(({ code, name }) => (
-              <option key={code} value={code}>
-                {name}
-              </option>
-            ))}
-          </Select>
-        </div>
+      <div className="space-y-4 flex-1">
+        {/* Audio Settings Section */}
+        <Card className="space-y-4">
+          {/* Language */}
+          <div className="space-y-2">
+            <Label>Language</Label>
+            <Select
+              value={settings.language}
+              onChange={(e) => updateLanguage(e.target.value)}
+            >
+              {SUPPORTED_LANGUAGES.map(({ code, name }) => (
+                <option key={code} value={code}>
+                  {name}
+                </option>
+              ))}
+            </Select>
+          </div>
 
-        {/* Microphone Device */}
-        <div className="space-y-2">
-          <Label>Microphone</Label>
-          {micPermissionStatus === "denied" ? (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                <div className="w-2 h-2 rounded-full bg-red-500" />
-                <span className="text-sm text-red-400">
-                  Microphone access denied
-                </span>
+          {/* Microphone Device */}
+          <div className="space-y-2">
+            <Label>Microphone</Label>
+            {micPermissionStatus === "denied" ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <div className="w-2 h-2 rounded-full bg-red-500" />
+                  <span className="text-sm text-red-400">
+                    Microphone access denied
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Grant microphone permission in System Settings → Privacy &
+                  Security → Microphone
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Grant microphone permission in System Settings → Privacy &
-                Security → Microphone
-              </p>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <Select
-                value={settings.microphoneDeviceId || ""}
-                onChange={(e) => updateMicrophoneDeviceId(e.target.value)}
-                disabled={isLoadingMics || microphones.length === 0}
-                className="flex-1"
-              >
-                <option value="">Default microphone</option>
-                {microphones.map((mic) => (
-                  <option key={mic.deviceId} value={mic.deviceId}>
-                    {mic.label}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                variant="secondary"
-                size="icon"
-                onClick={loadMicrophones}
-                disabled={isLoadingMics}
-                title="Refresh microphone list"
-              >
-                <RefreshCw
-                  size={16}
-                  className={isLoadingMics ? "animate-spin" : ""}
-                />
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {/* Auto-paste Toggle */}
-        <div className="space-y-2">
-          <Label>Auto-paste</Label>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={settings.autoPaste}
-              onChange={(e) => updateAutoPaste(e.target.checked)}
-              className="w-5 h-5 rounded border-border bg-input accent-primary cursor-pointer"
-            />
-            <span className="text-sm text-muted-foreground">
-              Automatically paste transcription (requires Accessibility
-              permission)
-            </span>
-          </label>
-        </div>
-
-        {/* Groq API Key */}
-        <ApiKeyInput
-          label="Groq API Key"
-          value={localGroqApiKey}
-          onChange={setLocalGroqApiKey}
-          onSave={handleSaveGroqApiKey}
-          status={groqStatus}
-          placeholder="gsk_..."
-        />
-
-        {/* Recording Shortcut */}
-        <div className="space-y-2">
-          <Label>Recording Shortcut</Label>
-          <Input
-            type="text"
-            value={formatShortcut(localShortcut)}
-            readOnly
-            onFocus={handleStartCapture}
-            onBlur={handleStopCapture}
-            onKeyDown={isCapturing ? handleCaptureShortcut : undefined}
-            placeholder="Click and press keys..."
-            capturing={isCapturing}
-            error={!!shortcutError}
-          />
-          {/* Hint - only show when capturing and no error */}
-          {isCapturing && !shortcutError && (
-            <p className="text-xs text-muted-foreground animate-pulse">
-              Press your key combination...
-            </p>
-          )}
-          {/* Error message - separate row with clear visual treatment */}
-          {shortcutError && (
-            <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-              <div className="flex flex-col gap-0.5">
-                <span className="text-sm text-red-400 font-medium">
-                  {shortcutError}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
-                </span>
+            ) : (
+              <div className="flex gap-2">
+                <Select
+                  value={settings.microphoneDeviceId || ""}
+                  onChange={(e) => updateMicrophoneDeviceId(e.target.value)}
+                  disabled={isLoadingMics || microphones.length === 0}
+                  className="flex-1"
+                >
+                  <option value="">Default microphone</option>
+                  {microphones.map((mic) => (
+                    <option key={mic.deviceId} value={mic.deviceId}>
+                      {mic.label}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  onClick={loadMicrophones}
+                  disabled={isLoadingMics}
+                  title="Refresh microphone list"
+                >
+                  <RefreshCw
+                    size={16}
+                    className={isLoadingMics ? "animate-spin" : ""}
+                  />
+                </Button>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Cancel Shortcut */}
-        <div className="space-y-2">
-          <Label>Cancel Shortcut</Label>
-          <Input
-            type="text"
-            value={formatShortcut(localCancelShortcut)}
-            readOnly
-            onFocus={handleStartCancelCapture}
-            onBlur={handleStopCancelCapture}
-            onKeyDown={isCapturingCancel ? handleCaptureCancelShortcut : undefined}
-            placeholder="Click and press keys..."
-            capturing={isCapturingCancel}
-            error={!!cancelShortcutError}
-          />
-          {/* Hint - only show when capturing and no error */}
-          {isCapturingCancel && !cancelShortcutError && (
-            <p className="text-xs text-muted-foreground animate-pulse">
-              Press Escape or a key combination...
-            </p>
-          )}
-          {/* Error message */}
-          {cancelShortcutError && (
-            <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-              <span className="text-sm text-red-400 font-medium">
-                {cancelShortcutError}
+          {/* Auto-paste Toggle */}
+          <div className="space-y-2">
+            <Label>Auto-paste</Label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.autoPaste}
+                onChange={(e) => updateAutoPaste(e.target.checked)}
+                className="w-5 h-5 rounded border-border bg-input accent-primary cursor-pointer"
+              />
+              <span className="text-sm text-muted-foreground">
+                Automatically paste transcription (requires Accessibility
+                permission)
               </span>
-            </div>
-          )}
-        </div>
+            </label>
+          </div>
+        </Card>
+
+        {/* API Key Section */}
+        <Card>
+          <ApiKeyInput
+            label="Groq API Key"
+            value={localGroqApiKey}
+            onChange={setLocalGroqApiKey}
+            onSave={handleSaveGroqApiKey}
+            status={groqStatus}
+            placeholder="gsk_..."
+          />
+        </Card>
+
+        {/* Shortcuts Section */}
+        <Card className="space-y-4">
+          {/* Recording Shortcut */}
+          <div className="space-y-2">
+            <Label>Recording Shortcut</Label>
+            <Input
+              type="text"
+              value={formatShortcut(localShortcut)}
+              readOnly
+              onFocus={handleStartCapture}
+              onBlur={handleStopCapture}
+              onKeyDown={isCapturing ? handleCaptureShortcut : undefined}
+              placeholder="Click and press keys..."
+              capturing={isCapturing}
+              error={!!shortcutError}
+            />
+            {/* Hint - only show when capturing and no error */}
+            {isCapturing && !shortcutError && (
+              <p className="text-xs text-muted-foreground animate-pulse">
+                Press your key combination...
+              </p>
+            )}
+            {/* Error message - separate row with clear visual treatment */}
+            {shortcutError && (
+              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm text-red-400 font-medium">
+                    {shortcutError}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Cancel Shortcut */}
+          <div className="space-y-2">
+            <Label>Cancel Shortcut</Label>
+            <Input
+              type="text"
+              value={formatShortcut(localCancelShortcut)}
+              readOnly
+              onFocus={handleStartCancelCapture}
+              onBlur={handleStopCancelCapture}
+              onKeyDown={isCapturingCancel ? handleCaptureCancelShortcut : undefined}
+              placeholder="Click and press keys..."
+              capturing={isCapturingCancel}
+              error={!!cancelShortcutError}
+            />
+            {/* Hint - only show when capturing and no error */}
+            {isCapturingCancel && !cancelShortcutError && (
+              <p className="text-xs text-muted-foreground animate-pulse">
+                Press Escape or a key combination...
+              </p>
+            )}
+            {/* Error message */}
+            {cancelShortcutError && (
+              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                <span className="text-sm text-red-400 font-medium">
+                  {cancelShortcutError}
+                </span>
+              </div>
+            )}
+          </div>
+        </Card>
       </div>
 
       <footer className="mt-auto pt-6 text-center">
