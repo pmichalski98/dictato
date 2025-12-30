@@ -25,6 +25,7 @@ interface NativeAudioDevice {
 const STATUS_RESET_DELAY_MS = 2000;
 
 const SUPPORTED_LANGUAGES = [
+  { code: "auto", name: "Auto-detect" },
   { code: "en", name: "English" },
   { code: "pl", name: "Polish" },
   { code: "es", name: "Spanish" },
