@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useSettings } from "../hooks/useSettings";
+import { formatShortcut } from "@/lib/shortcuts";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
@@ -33,16 +34,6 @@ const SUPPORTED_LANGUAGES = [
 ] as const;
 
 type SaveStatus = "idle" | "saved" | "error";
-
-// Format shortcut for display (shorter, more readable)
-function formatShortcut(shortcut: string): string {
-  return shortcut
-    .replace(/CommandOrControl/g, "Ctrl")
-    .replace(/ArrowUp/g, "↑")
-    .replace(/ArrowDown/g, "↓")
-    .replace(/ArrowLeft/g, "←")
-    .replace(/ArrowRight/g, "→");
-}
 
 interface ApiKeyInputProps {
   label: string;

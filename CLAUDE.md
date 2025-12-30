@@ -38,3 +38,12 @@ Tauri v2 desktop app: React/TypeScript frontend + Rust backend. Uses OpenAI Real
 - `public/audio-processor.js` - AudioWorklet for mic capture
 
 **Tauri plugins:** global-shortcut, clipboard-manager, store, autostart
+
+## UI Components
+
+This project uses **shadcn/ui** for UI components. Always prefer using shadcn components over creating custom ones from scratch:
+
+- Check `src/components/ui/` for existing components
+- Add new shadcn components via: `bunx shadcn@latest add <component-name>`
+- Components are based on Radix UI primitives with Tailwind styling
+- See https://ui.shadcn.com/docs/components for available components
