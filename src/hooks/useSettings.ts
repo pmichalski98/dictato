@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
+export interface TranscriptionRule {
+  id: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  isBuiltIn: boolean;
+}
+
 interface Settings {
   groqApiKey: string;
   language: string;
@@ -8,7 +16,46 @@ interface Settings {
   cancelShortcut: string;
   microphoneDeviceId: string;
   autoPaste: boolean;
+  transcriptionRules: TranscriptionRule[];
 }
+
+const DEFAULT_RULES: TranscriptionRule[] = [
+  {
+    id: "fix-grammar",
+    title: "Fix Grammar & Spelling",
+    description: "Correct grammar, spelling, and punctuation errors",
+    enabled: false,
+    isBuiltIn: true,
+  },
+  {
+    id: "remove-fillers",
+    title: "Remove Filler Words",
+    description: "Remove 'um', 'uh', 'like', 'you know', etc.",
+    enabled: false,
+    isBuiltIn: true,
+  },
+  {
+    id: "smart-punctuation",
+    title: "Smart Punctuation",
+    description: "Add proper sentence structure and punctuation",
+    enabled: false,
+    isBuiltIn: true,
+  },
+  {
+    id: "be-concise",
+    title: "Be Concise",
+    description: "Remove unnecessary words and repetition",
+    enabled: false,
+    isBuiltIn: true,
+  },
+  {
+    id: "professional-tone",
+    title: "Professional Tone",
+    description: "Maintain a professional, polished tone",
+    enabled: false,
+    isBuiltIn: true,
+  },
+];
 
 const DEFAULT_SETTINGS: Settings = {
   groqApiKey: "",
@@ -17,6 +64,7 @@ const DEFAULT_SETTINGS: Settings = {
   cancelShortcut: "Escape",
   microphoneDeviceId: "",
   autoPaste: true,
+  transcriptionRules: DEFAULT_RULES,
 };
 
 const store = new LazyStore("settings.json");
@@ -34,6 +82,16 @@ export function useSettings() {
         const cancelShortcut = await store.get<string>("cancelShortcut");
         const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
         const autoPaste = await store.get<string>("autoPaste");
+        const transcriptionRulesJson = await store.get<string>("transcriptionRules");
+
+        let transcriptionRules = DEFAULT_RULES;
+        if (transcriptionRulesJson) {
+          try {
+            transcriptionRules = JSON.parse(transcriptionRulesJson);
+          } catch {
+            console.error("Failed to parse transcription rules");
+          }
+        }
 
         setSettings({
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
@@ -42,6 +100,7 @@ export function useSettings() {
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
           autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
+          transcriptionRules,
         });
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -107,6 +166,46 @@ export function useSettings() {
     }
   }, []);
 
+  const updateTranscriptionRules = useCallback(async (rules: TranscriptionRule[]) => {
+    try {
+      await store.set("transcriptionRules", JSON.stringify(rules));
+      setSettings((prev) => ({ ...prev, transcriptionRules: rules }));
+    } catch (err) {
+      console.error("Failed to save transcription rules:", err);
+    }
+  }, []);
+
+  const toggleRule = useCallback(async (ruleId: string) => {
+    const newRules = settings.transcriptionRules.map((rule) =>
+      rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule
+    );
+    await updateTranscriptionRules(newRules);
+  }, [settings.transcriptionRules, updateTranscriptionRules]);
+
+  const addRule = useCallback(async (title: string, description: string) => {
+    const newRule: TranscriptionRule = {
+      id: `custom-${Date.now()}`,
+      title,
+      description,
+      enabled: false,
+      isBuiltIn: false,
+    };
+    const newRules = [...settings.transcriptionRules, newRule];
+    await updateTranscriptionRules(newRules);
+  }, [settings.transcriptionRules, updateTranscriptionRules]);
+
+  const updateRule = useCallback(async (ruleId: string, updates: Partial<TranscriptionRule>) => {
+    const newRules = settings.transcriptionRules.map((rule) =>
+      rule.id === ruleId ? { ...rule, ...updates } : rule
+    );
+    await updateTranscriptionRules(newRules);
+  }, [settings.transcriptionRules, updateTranscriptionRules]);
+
+  const deleteRule = useCallback(async (ruleId: string) => {
+    const newRules = settings.transcriptionRules.filter((rule) => rule.id !== ruleId);
+    await updateTranscriptionRules(newRules);
+  }, [settings.transcriptionRules, updateTranscriptionRules]);
+
   return {
     settings,
     isLoading,
@@ -116,6 +215,11 @@ export function useSettings() {
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    updateTranscriptionRules,
+    toggleRule,
+    addRule,
+    updateRule,
+    deleteRule,
   };
 }
 
