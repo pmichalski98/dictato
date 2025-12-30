@@ -1,12 +1,12 @@
 [package]
-name = "whisper_clone"
+name = "dictato"
 version = "0.1.0"
-description = "A Whisper Clone Tauri App"
+description = "Dictato - Voice transcription app"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "whisper_clone_lib"
+name = "dictato_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
