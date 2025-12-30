@@ -1,6 +1,6 @@
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const MAX_BUFFER_SIZE: usize = 24 * 1024 * 1024; // 24MB (under Groq's 25MB limit)
@@ -9,14 +9,15 @@ const CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
+#[derive(Clone)]
 pub struct GroqState {
-    audio_buffer: Mutex<Vec<u8>>,
+    audio_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Default for GroqState {
     fn default() -> Self {
         Self {
-            audio_buffer: Mutex::new(Vec::new()),
+            audio_buffer: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

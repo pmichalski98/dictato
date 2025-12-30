@@ -14,12 +14,26 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TranscriptionRule } from "@/hooks/useSettings";
 
-const TARGET_SAMPLE_RATE = 24000;
 const store = new LazyStore("settings.json");
-const BAR_COUNT = 24;
-const MIN_BAR_HEIGHT = 4;
-const MAX_BAR_HEIGHT = 32;
-const VOICE_AMPLIFICATION = 2.5;
+
+// Audio visualization constants
+const BAR_COUNT = 48;
+const MIN_BAR_HEIGHT = 3;
+const MAX_BAR_HEIGHT = 48;
+
+// Audio level processing constants
+const NOISE_THRESHOLD = 0.015; // Below this level, treat as silence
+const AMPLIFICATION_FACTOR = 6.0; // Boost audio levels for better visualization
+
+// Wave shape constants for organic visualization
+const WAVE_BASE = 0.85; // Base wave amplitude
+const WAVE_VARIATION = 0.15; // Wave variation range
+const WAVE_FREQUENCY = 3; // Number of wave cycles across bars
+const LEVEL_PHASE_FACTOR = 2; // How much audio level affects wave phase
+
+// Random variation for organic feel
+const RANDOM_BASE = 0.92; // Minimum random factor
+const RANDOM_RANGE = 0.16; // Random variation range
 
 // Store keys (should match backend)
 const STORE_KEYS = {
@@ -27,7 +41,6 @@ const STORE_KEYS = {
   TRANSCRIPTION_RULES: "transcriptionRules",
   CANCEL_SHORTCUT: "cancelShortcut",
   SHORTCUT: "shortcut",
-  MICROPHONE_DEVICE_ID: "microphoneDeviceId",
 } as const;
 
 export function FloatingWindow() {
@@ -44,151 +57,57 @@ export function FloatingWindow() {
   const [skipRules, setSkipRules] = useState(false);
   const [hasEnabledRules, setHasEnabledRules] = useState(false);
 
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const isStartingRef = useRef(false);
+  // Ref to store previous bar heights for smooth animation
+  const prevBarHeightsRef = useRef<number[]>(
+    Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
+  );
 
-  const updateBars = useCallback(() => {
-    if (!analyserRef.current) return;
-
-    const analyser = analyserRef.current;
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(dataArray);
-
-    const newHeights: number[] = [];
-    const binSize = Math.floor(dataArray.length / BAR_COUNT);
-
-    for (let i = 0; i < BAR_COUNT; i++) {
-      const start = i * binSize;
-      const end = start + binSize;
-      let sum = 0;
-      for (let j = start; j < end; j++) {
-        sum += dataArray[j];
-      }
-      const avg = sum / binSize;
-      const amplified = Math.min(255, avg * VOICE_AMPLIFICATION);
-      const height =
-        MIN_BAR_HEIGHT + (amplified / 255) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
-      newHeights.push(height);
+  // Update bars based on audio level from native capture
+  const updateBarsFromLevel = useCallback((level: number) => {
+    // Noise gate - ignore very low levels (ambient noise)
+    if (level < NOISE_THRESHOLD) {
+      setBarHeights(Array(BAR_COUNT).fill(MIN_BAR_HEIGHT));
+      return;
     }
+
+    // Amplify the level above threshold
+    const adjustedLevel = (level - NOISE_THRESHOLD) / (1 - NOISE_THRESHOLD);
+    const amplifiedLevel = Math.min(1.0, Math.sqrt(adjustedLevel) * AMPLIFICATION_FACTOR);
+
+    // Create organic wave shape like the icon - high in middle, low on edges
+    const newHeights = Array.from({ length: BAR_COUNT }, (_, i) => {
+      // Normalize position to 0-1
+      const t = i / (BAR_COUNT - 1);
+
+      // Bell curve envelope - ensures edges are always low
+      const envelope = Math.sin(t * Math.PI);
+      // Squared for steeper falloff at edges
+      const envelopeStrong = envelope * envelope;
+
+      // Add subtle wave variation within the envelope
+      const waveModulation =
+        WAVE_BASE +
+        WAVE_VARIATION * Math.sin(t * Math.PI * WAVE_FREQUENCY + amplifiedLevel * LEVEL_PHASE_FACTOR);
+
+      // Combine envelope with variation
+      const waveEffect = envelopeStrong * waveModulation;
+
+      // Subtle randomness for organic feel
+      const randomFactor = RANDOM_BASE + Math.random() * RANDOM_RANGE;
+
+      return (
+        MIN_BAR_HEIGHT +
+        amplifiedLevel * waveEffect * randomFactor * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT)
+      );
+    });
 
     setBarHeights(newHeights);
-    animationFrameRef.current = requestAnimationFrame(updateBars);
   }, []);
 
-  const stopAudioCapture = useCallback(() => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-
-    workletNodeRef.current?.disconnect();
-    workletNodeRef.current = null;
-
-    analyserRef.current?.disconnect();
-    analyserRef.current = null;
-
-    sourceNodeRef.current?.disconnect();
-    sourceNodeRef.current = null;
-
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-
-    const ctx = audioContextRef.current;
-    audioContextRef.current = null;
-    if (ctx && ctx.state !== "closed") {
-      ctx.close().catch((err) => {
-        console.error("[FloatingWindow] Error closing AudioContext:", err);
-      });
-    }
-
+  const resetBars = useCallback(() => {
+    prevBarHeightsRef.current = Array(BAR_COUNT).fill(MIN_BAR_HEIGHT);
     setBarHeights(Array(BAR_COUNT).fill(MIN_BAR_HEIGHT));
   }, []);
-
-  const startAudioCapture = useCallback(async () => {
-    if (audioContextRef.current || isStartingRef.current) return;
-    isStartingRef.current = true;
-
-    try {
-      console.log("[FloatingWindow] Starting audio capture...");
-
-      const microphoneDeviceId = await store.get<string>(
-        STORE_KEYS.MICROPHONE_DEVICE_ID
-      );
-
-      const audioConstraints: MediaTrackConstraints = {
-        sampleRate: { ideal: TARGET_SAMPLE_RATE },
-        channelCount: { ideal: 1 },
-        echoCancellation: true,
-        noiseSuppression: true,
-      };
-
-      if (microphoneDeviceId) {
-        audioConstraints.deviceId = { exact: microphoneDeviceId };
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-      });
-      streamRef.current = stream;
-
-      const audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-      audioContextRef.current = audioContext;
-
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.6;
-      analyserRef.current = analyser;
-
-      await audioContext.audioWorklet.addModule("/audio-processor.js");
-      const source = audioContext.createMediaStreamSource(stream);
-      sourceNodeRef.current = source;
-
-      const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
-      workletNodeRef.current = workletNode;
-
-      workletNode.port.onmessage = async (event) => {
-        if (event.data.type === "audio") {
-          try {
-            await invoke("send_audio_chunk", {
-              audio: Array.from(new Uint8Array(event.data.audio)),
-            });
-          } catch (err) {
-            console.error("Failed to send audio:", err);
-          }
-        }
-      };
-
-      source.connect(analyser);
-      analyser.connect(workletNode);
-
-      animationFrameRef.current = requestAnimationFrame(updateBars);
-
-      console.log("[FloatingWindow] Audio capture started!");
-    } catch (err) {
-      console.error("[FloatingWindow] Failed to start audio:", err);
-      if (err instanceof DOMException) {
-        if (err.name === "NotAllowedError") {
-          setError("Mic denied");
-        } else if (err.name === "NotFoundError") {
-          setError("Mic not found");
-        } else if (err.name === "OverconstrainedError") {
-          setError("Mic unavailable");
-        } else {
-          setError(`Mic error: ${err.name}`);
-        }
-      } else {
-        setError("Mic error");
-      }
-      stopAudioCapture();
-    } finally {
-      isStartingRef.current = false;
-    }
-  }, [updateBars, stopAudioCapture]);
 
   const checkEnabledRules = useCallback(async () => {
     try {
@@ -235,13 +154,18 @@ export function FloatingWindow() {
             setRecordingShortcut(savedRecordingShortcut);
           }
           checkEnabledRules();
-          startAudioCapture();
+          // Audio capture is now handled natively in Rust
         } else {
-          stopAudioCapture();
+          resetBars();
           setIsProcessing(false);
         }
       }
     );
+
+    // Listen for audio levels from native capture
+    const unlistenAudioLevel = listen<number>("audio-level", (event) => {
+      updateBarsFromLevel(event.payload);
+    });
 
     const unlistenError = listen<string>("transcription-error", (event) => {
       setError(event.payload);
@@ -262,13 +186,14 @@ export function FloatingWindow() {
     );
 
     return () => {
-      stopAudioCapture();
+      resetBars();
       unlistenExpanded.then((fn) => fn());
+      unlistenAudioLevel.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenProcessing.then((fn) => fn());
       unlistenProcessingMessage.then((fn) => fn());
     };
-  }, [startAudioCapture, stopAudioCapture, checkEnabledRules]);
+  }, [checkEnabledRules, updateBarsFromLevel, resetBars]);
 
   const handleDragStart = useCallback(async (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button")) {
@@ -352,11 +277,11 @@ export function FloatingWindow() {
           ) : error ? (
             <span className="text-sm text-red-400 font-medium">{error}</span>
           ) : (
-            <div className="flex items-center gap-[3px] h-8">
+            <div className="flex items-center gap-[2px] h-12">
               {barHeights.map((height, i) => (
                 <div
                   key={i}
-                  className="w-[3px] bg-linear-to-t from-violet-500 to-pink-400 rounded-full transition-all duration-75"
+                  className="w-[2px] bg-linear-to-t from-violet-500 to-pink-400 rounded-full"
                   style={{ height: `${height}px` }}
                 />
               ))}
