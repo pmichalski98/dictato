@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { LazyStore } from "@tauri-apps/plugin-store";
 
 const TARGET_SAMPLE_RATE = 24000;
+const store = new LazyStore("settings.json");
 const BAR_COUNT = 24;
 const MIN_BAR_HEIGHT = 4;
 const MAX_BAR_HEIGHT = 28;
@@ -90,13 +92,25 @@ export function FloatingWindow() {
 
     try {
       console.log("[FloatingWindow] Starting audio capture...");
+
+      // Get saved microphone device ID from settings
+      const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
+
+      const audioConstraints: MediaTrackConstraints = {
+        // Use 'ideal' instead of exact to avoid "no device found" errors
+        sampleRate: { ideal: TARGET_SAMPLE_RATE },
+        channelCount: { ideal: 1 },
+        echoCancellation: true,
+        noiseSuppression: true,
+      };
+
+      // Only set deviceId if a specific device was selected
+      if (microphoneDeviceId) {
+        audioConstraints.deviceId = { exact: microphoneDeviceId };
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: TARGET_SAMPLE_RATE,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: audioConstraints,
       });
       streamRef.current = stream;
 
@@ -136,7 +150,20 @@ export function FloatingWindow() {
       console.log("[FloatingWindow] Audio capture started!");
     } catch (err) {
       console.error("[FloatingWindow] Failed to start audio:", err);
-      setError("Mic denied");
+      // Provide more specific error messages
+      if (err instanceof DOMException) {
+        if (err.name === "NotAllowedError") {
+          setError("Mic denied");
+        } else if (err.name === "NotFoundError") {
+          setError("Mic not found");
+        } else if (err.name === "OverconstrainedError") {
+          setError("Mic unavailable");
+        } else {
+          setError(`Mic error: ${err.name}`);
+        }
+      } else {
+        setError("Mic error");
+      }
       // Clean up any partial initialization
       stopAudioCapture();
     } finally {

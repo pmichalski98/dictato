@@ -9,6 +9,8 @@ interface Settings {
   provider: Provider;
   language: string;
   shortcut: string;
+  microphoneDeviceId: string;
+  autoPaste: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -17,6 +19,8 @@ const DEFAULT_SETTINGS: Settings = {
   provider: "openai",
   language: "en",
   shortcut: "CommandOrControl+Shift+Space",
+  microphoneDeviceId: "",
+  autoPaste: true,
 };
 
 const store = new LazyStore("settings.json");
@@ -33,6 +37,8 @@ export function useSettings() {
         const provider = await store.get<Provider>("provider");
         const language = await store.get<string>("language");
         const shortcut = await store.get<string>("shortcut");
+        const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
+        const autoPaste = await store.get<string>("autoPaste");
 
         setSettings({
           apiKey: apiKey ?? DEFAULT_SETTINGS.apiKey,
@@ -40,6 +46,8 @@ export function useSettings() {
           provider: provider ?? DEFAULT_SETTINGS.provider,
           language: language ?? DEFAULT_SETTINGS.language,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
+          microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
+          autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
         });
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -96,6 +104,24 @@ export function useSettings() {
     }
   }, []);
 
+  const updateMicrophoneDeviceId = useCallback(async (microphoneDeviceId: string) => {
+    try {
+      await store.set("microphoneDeviceId", microphoneDeviceId);
+      setSettings((prev) => ({ ...prev, microphoneDeviceId }));
+    } catch (err) {
+      console.error("Failed to save microphone device:", err);
+    }
+  }, []);
+
+  const updateAutoPaste = useCallback(async (autoPaste: boolean) => {
+    try {
+      await store.set("autoPaste", autoPaste ? "true" : "false");
+      setSettings((prev) => ({ ...prev, autoPaste }));
+    } catch (err) {
+      console.error("Failed to save auto-paste setting:", err);
+    }
+  }, []);
+
   return {
     settings,
     isLoading,
@@ -104,6 +130,8 @@ export function useSettings() {
     updateProvider,
     updateLanguage,
     updateShortcut,
+    updateMicrophoneDeviceId,
+    updateAutoPaste,
   };
 }
 
