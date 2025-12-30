@@ -49,25 +49,25 @@ export function AddRuleDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative bg-background border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-foreground">
+      <div className="relative bg-background border border-border rounded-lg shadow-xl w-full max-w-sm mx-4 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[15px] font-semibold text-foreground">
             {editingRule ? "Edit Rule" : "Add Custom Rule"}
           </h2>
           <button
             onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+            className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/30"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1.5">
               Title
             </label>
             <Input
@@ -79,7 +79,7 @@ export function AddRuleDialog({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1.5">
               Description
             </label>
             <textarea
@@ -87,11 +87,11 @@ export function AddRuleDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g., Simplify technical terms for general audience"
               rows={3}
-              className="w-full bg-input border border-border rounded-lg px-4 py-3 text-sm text-foreground transition-all placeholder:text-muted focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring/20 resize-none"
+              className="w-full bg-input border border-border rounded-md px-2.5 py-2 text-[13px] text-foreground transition-all placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none"
             />
           </div>
 
-          <div className="flex gap-3 pt-2">
+          <div className="flex gap-2 pt-1">
             <Button
               type="button"
               variant="secondary"
