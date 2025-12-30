@@ -70,7 +70,6 @@ struct RealtimeEvent {
 #[derive(Deserialize, Debug)]
 struct ErrorDetail {
     message: Option<String>,
-    code: Option<String>,
 }
 
 pub async fn start_session(app: AppHandle, api_key: String) -> Result<(), String> {

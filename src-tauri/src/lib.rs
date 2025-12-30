@@ -99,26 +99,46 @@ async fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> 
 
 #[tauri::command]
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
+    // Always copy to clipboard first
     app.clipboard()
         .write_text(&text)
         .map_err(|e| e.to_string())?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    println!("[Dictato] Text copied to clipboard");
 
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    // Check if auto-paste is enabled
+    let auto_paste_enabled = get_store_string(&app, "autoPaste")
+        .map(|v| v == "true")
+        .unwrap_or(true); // Default to enabled
 
-    #[cfg(target_os = "macos")]
-    {
-        enigo.key(Key::Meta, enigo::Direction::Press).ok();
-        enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
-        enigo.key(Key::Meta, enigo::Direction::Release).ok();
+    if !auto_paste_enabled {
+        println!("[Dictato] Auto-paste disabled. Press Cmd+V to paste.");
+        return Ok(());
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        enigo.key(Key::Control, enigo::Direction::Press).ok();
-        enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
-        enigo.key(Key::Control, enigo::Direction::Release).ok();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Try to auto-paste
+    match Enigo::new(&Settings::default()) {
+        Ok(mut enigo) => {
+            #[cfg(target_os = "macos")]
+            {
+                enigo.key(Key::Meta, enigo::Direction::Press).ok();
+                enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
+                enigo.key(Key::Meta, enigo::Direction::Release).ok();
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                enigo.key(Key::Control, enigo::Direction::Press).ok();
+                enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
+                enigo.key(Key::Control, enigo::Direction::Release).ok();
+            }
+            println!("[Dictato] Auto-pasted");
+        }
+        Err(e) => {
+            println!("[Dictato] Auto-paste failed: {:?}. Grant Accessibility permissions in System Settings → Privacy & Security → Accessibility", e);
+        }
     }
 
     Ok(())
