@@ -213,7 +213,7 @@ export function Settings() {
     <div className="min-h-screen bg-background text-foreground p-8 flex flex-col overflow-auto">
       <header className="mb-8">
         <h1 className="text-3xl font-semibold bg-linear-to-r from-pink-400 via-violet-400 to-blue-400 bg-clip-text text-transparent">
-          Whisper Clone
+          Dictato
         </h1>
         <p className="text-muted-foreground text-sm font-light mt-1">
           Voice to text, instantly

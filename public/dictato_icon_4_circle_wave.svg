@@ -1,0 +1,23 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#A855F7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#EC4899;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background rounded square -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#1a1a2e"/>
+  
+  <!-- Outer circle ring -->
+  <circle cx="256" cy="256" r="180" stroke="url(#grad1)" stroke-width="24" fill="none"/>
+  
+  <!-- Center waveform bars -->
+  <rect x="136" y="226" width="20" height="60" rx="10" fill="url(#grad1)"/>
+  <rect x="176" y="196" width="20" height="120" rx="10" fill="url(#grad1)"/>
+  <rect x="216" y="156" width="20" height="200" rx="10" fill="url(#grad1)"/>
+  <rect x="256" y="186" width="20" height="140" rx="10" fill="url(#grad1)"/>
+  <rect x="296" y="166" width="20" height="180" rx="10" fill="url(#grad1)"/>
+  <rect x="336" y="206" width="20" height="100" rx="10" fill="url(#grad1)"/>
+  <rect x="376" y="231" width="20" height="50" rx="10" fill="url(#grad1)"/>
+</svg>

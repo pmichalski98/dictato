@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    whisper_clone_lib::run()
+    dictato_lib::run()
 }
