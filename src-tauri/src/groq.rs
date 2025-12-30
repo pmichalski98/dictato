@@ -89,11 +89,15 @@ pub async fn transcribe(api_key: &str, audio_data: Vec<u8>, language: &str) -> R
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())?;
 
-    let form = Form::new()
+    let mut form = Form::new()
         .part("file", part)
         .text("model", "whisper-large-v3-turbo")
-        .text("response_format", "json")
-        .text("language", language.to_string());
+        .text("response_format", "json");
+
+    // Only include language if not auto-detect (empty or "auto" means auto-detect)
+    if !language.is_empty() && language != "auto" {
+        form = form.text("language", language.to_string());
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
