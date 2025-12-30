@@ -14,6 +14,25 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
 
+// Floating window constants
+const FLOATING_WINDOW_WIDTH: f64 = 320.0;
+const FLOATING_WINDOW_HEIGHT: f64 = 160.0;
+const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
+
+// Store keys
+mod store_keys {
+    pub const FLOATING_X: &str = "floatingX";
+    pub const FLOATING_Y: &str = "floatingY";
+    pub const SKIP_RULES_ONCE: &str = "skipRulesOnce";
+    pub const TRANSCRIPTION_RULES: &str = "transcriptionRules";
+    pub const GROQ_API_KEY: &str = "groqApiKey";
+    pub const LANGUAGE: &str = "language";
+    pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
+    pub const SHORTCUT: &str = "shortcut";
+    pub const AUTO_PASTE: &str = "autoPaste";
+    pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
+}
+
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
@@ -53,24 +72,30 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         }
     };
 
-    // Apply transcription rules if any are enabled
+    // Apply transcription rules if any are enabled (and not skipped for this recording)
     let final_text = if !transcript.is_empty() {
-        let rules = get_transcription_rules_from_store(&app);
-        let has_enabled_rules = rules.iter().any(|r| r.enabled);
-        if has_enabled_rules {
-            app.emit("processing-message", "Applying rules...").ok();
-            match llm::process_with_rules(&api_key, &transcript, rules).await {
-                Ok(processed) => {
-                    println!("[Dictato] Rules applied successfully");
-                    processed
-                }
-                Err(e) => {
-                    eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
-                    transcript
-                }
-            }
-        } else {
+        let skip_rules = should_skip_rules(&app);
+        if skip_rules {
+            println!("[Dictato] Rules skipped for this recording");
             transcript
+        } else {
+            let rules = get_transcription_rules_from_store(&app);
+            let has_enabled_rules = rules.iter().any(|r| r.enabled);
+            if has_enabled_rules {
+                app.emit("processing-message", "Applying rules...").ok();
+                match llm::process_with_rules(&api_key, &transcript, rules).await {
+                    Ok(processed) => {
+                        println!("[Dictato] Rules applied successfully");
+                        processed
+                    }
+                    Err(e) => {
+                        eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
+                        transcript
+                    }
+                }
+            } else {
+                transcript
+            }
         }
     } else {
         transcript
@@ -127,7 +152,7 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     println!("[Dictato] Text copied to clipboard");
 
     // Check if auto-paste is enabled
-    let auto_paste_enabled = get_store_string(&app, "autoPaste")
+    let auto_paste_enabled = get_store_string(&app, store_keys::AUTO_PASTE)
         .map(|v| v == "true")
         .unwrap_or(true); // Default to enabled
 
@@ -238,7 +263,7 @@ async fn register_cancel_shortcut(app: AppHandle, shortcut_str: String) -> Resul
     app.global_shortcut().unregister_all().ok();
 
     // Re-register the main recording shortcut
-    let main_shortcut_str = get_store_string(&app, "shortcut")
+    let main_shortcut_str = get_store_string(&app, store_keys::SHORTCUT)
         .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
 
     let main_shortcut: Shortcut = main_shortcut_str.parse().map_err(|e| format!("{:?}", e))?;
@@ -283,21 +308,27 @@ fn get_store_string(app: &AppHandle, key: &str) -> Option<String> {
 }
 
 fn get_groq_api_key_from_store(app: &AppHandle) -> Option<String> {
-    get_store_string(app, "groqApiKey")
+    get_store_string(app, store_keys::GROQ_API_KEY)
 }
 
 fn get_language_from_store(app: &AppHandle) -> String {
-    get_store_string(app, "language").unwrap_or_else(|| "en".to_string())
+    get_store_string(app, store_keys::LANGUAGE).unwrap_or_else(|| "en".to_string())
 }
 
 fn get_cancel_shortcut_from_store(app: &AppHandle) -> String {
-    get_store_string(app, "cancelShortcut").unwrap_or_else(|| "Escape".to_string())
+    get_store_string(app, store_keys::CANCEL_SHORTCUT).unwrap_or_else(|| "Escape".to_string())
 }
 
 fn get_transcription_rules_from_store(app: &AppHandle) -> Vec<llm::TranscriptionRule> {
-    get_store_string(app, "transcriptionRules")
+    get_store_string(app, store_keys::TRANSCRIPTION_RULES)
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+fn should_skip_rules(app: &AppHandle) -> bool {
+    get_store_string(app, store_keys::SKIP_RULES_ONCE)
+        .map(|s| s == "true")
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -305,15 +336,22 @@ fn get_recording_state() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
 }
 
+fn get_floating_position_from_store(app: &AppHandle) -> Option<(f64, f64)> {
+    let store = app.store("settings.json").ok()?;
+    let x = store.get(store_keys::FLOATING_X).and_then(|v| v.as_f64());
+    let y = store.get(store_keys::FLOATING_Y).and_then(|v| v.as_f64());
+    match (x, y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    }
+}
+
 #[tauri::command]
-fn set_floating_x(app: AppHandle, x: f64) {
-    if let Some(window) = app.get_webview_window("floating") {
-        window
-            .set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                x,
-                y: 8.0,
-            }))
-            .ok();
+fn save_floating_position(app: AppHandle, x: f64, y: f64) {
+    if let Ok(store) = app.store("settings.json") {
+        store.set(store_keys::FLOATING_X, serde_json::json!(x));
+        store.set(store_keys::FLOATING_Y, serde_json::json!(y));
+        store.save().ok();
     }
 }
 
@@ -326,7 +364,7 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     let mut builder =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
             .title("Whisper")
-            .inner_size(320.0, 90.0)
+            .inner_size(FLOATING_WINDOW_WIDTH, FLOATING_WINDOW_HEIGHT)
             .decorations(false)
             .always_on_top(true)
             .skip_taskbar(true)
@@ -342,13 +380,18 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
 
     let window = builder.build().map_err(|e| e.to_string())?;
 
-    if let Ok(Some(monitor)) = window.primary_monitor() {
+    // Use saved position or default to centered at top
+    if let Some((x, y)) = get_floating_position_from_store(app) {
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
+            .ok();
+    } else if let Ok(Some(monitor)) = window.primary_monitor() {
         let screen_width = monitor.size().width as f64 / monitor.scale_factor();
-        let x = (screen_width - 320.0) / 2.0;
+        let x = (screen_width - FLOATING_WINDOW_WIDTH) / 2.0;
         window
             .set_position(tauri::Position::Logical(tauri::LogicalPosition {
                 x,
-                y: 8.0,
+                y: FLOATING_WINDOW_DEFAULT_Y,
             }))
             .ok();
     }
@@ -442,7 +485,7 @@ pub fn run() {
             register_cancel_shortcut,
             unregister_shortcuts,
             get_recording_state,
-            set_floating_x,
+            save_floating_position,
         ])
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;

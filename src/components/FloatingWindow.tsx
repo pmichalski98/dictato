@@ -2,22 +2,33 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { formatShortcut } from "@/lib/shortcuts";
+import { CheckIcon, GearIcon } from "@/components/ui/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TranscriptionRule } from "@/hooks/useSettings";
 
 const TARGET_SAMPLE_RATE = 24000;
 const store = new LazyStore("settings.json");
 const BAR_COUNT = 24;
 const MIN_BAR_HEIGHT = 4;
 const MAX_BAR_HEIGHT = 32;
-const VOICE_AMPLIFICATION = 2.5; // Boost voice frequencies for more visible movement
+const VOICE_AMPLIFICATION = 2.5;
 
-function formatShortcut(shortcut: string): string {
-  return shortcut
-    .replace(/CommandOrControl/g, "Ctrl")
-    .replace(/ArrowUp/g, "↑")
-    .replace(/ArrowDown/g, "↓")
-    .replace(/ArrowLeft/g, "←")
-    .replace(/ArrowRight/g, "→");
-}
+// Store keys (should match backend)
+const STORE_KEYS = {
+  SKIP_RULES_ONCE: "skipRulesOnce",
+  TRANSCRIPTION_RULES: "transcriptionRules",
+  CANCEL_SHORTCUT: "cancelShortcut",
+  SHORTCUT: "shortcut",
+  MICROPHONE_DEVICE_ID: "microphoneDeviceId",
+} as const;
 
 export function FloatingWindow() {
   const [isActive, setIsActive] = useState(false);
@@ -25,10 +36,13 @@ export function FloatingWindow() {
   const [processingMessage, setProcessingMessage] = useState("Transcribing...");
   const [error, setError] = useState<string | null>(null);
   const [cancelShortcut, setCancelShortcut] = useState("Escape");
-  const [recordingShortcut, setRecordingShortcut] = useState("Ctrl+Shift+Space");
+  const [recordingShortcut, setRecordingShortcut] =
+    useState("Ctrl+Shift+Space");
   const [barHeights, setBarHeights] = useState<number[]>(
     Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
   );
+  const [skipRules, setSkipRules] = useState(false);
+  const [hasEnabledRules, setHasEnabledRules] = useState(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -56,7 +70,6 @@ export function FloatingWindow() {
         sum += dataArray[j];
       }
       const avg = sum / binSize;
-      // Apply amplification and clamp to [0, 255]
       const amplified = Math.min(255, avg * VOICE_AMPLIFICATION);
       const height =
         MIN_BAR_HEIGHT + (amplified / 255) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
@@ -68,13 +81,11 @@ export function FloatingWindow() {
   }, []);
 
   const stopAudioCapture = useCallback(() => {
-    // Cancel animation frame first
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
 
-    // Disconnect nodes in reverse connection order
     workletNodeRef.current?.disconnect();
     workletNodeRef.current = null;
 
@@ -84,11 +95,9 @@ export function FloatingWindow() {
     sourceNodeRef.current?.disconnect();
     sourceNodeRef.current = null;
 
-    // Stop media tracks before closing context
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
 
-    // Close audio context (fire and forget, but log errors)
     const ctx = audioContextRef.current;
     audioContextRef.current = null;
     if (ctx && ctx.state !== "closed") {
@@ -101,25 +110,23 @@ export function FloatingWindow() {
   }, []);
 
   const startAudioCapture = useCallback(async () => {
-    // Guard against concurrent starts
     if (audioContextRef.current || isStartingRef.current) return;
     isStartingRef.current = true;
 
     try {
       console.log("[FloatingWindow] Starting audio capture...");
 
-      // Get saved microphone device ID from settings
-      const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
+      const microphoneDeviceId = await store.get<string>(
+        STORE_KEYS.MICROPHONE_DEVICE_ID
+      );
 
       const audioConstraints: MediaTrackConstraints = {
-        // Use 'ideal' instead of exact to avoid "no device found" errors
         sampleRate: { ideal: TARGET_SAMPLE_RATE },
         channelCount: { ideal: 1 },
         echoCancellation: true,
         noiseSuppression: true,
       };
 
-      // Only set deviceId if a specific device was selected
       if (microphoneDeviceId) {
         audioConstraints.deviceId = { exact: microphoneDeviceId };
       }
@@ -134,7 +141,7 @@ export function FloatingWindow() {
 
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4; // Lower = more responsive to voice
+      analyser.smoothingTimeConstant = 0.6;
       analyserRef.current = analyser;
 
       await audioContext.audioWorklet.addModule("/audio-processor.js");
@@ -158,14 +165,12 @@ export function FloatingWindow() {
 
       source.connect(analyser);
       analyser.connect(workletNode);
-      workletNode.connect(audioContext.destination);
 
       animationFrameRef.current = requestAnimationFrame(updateBars);
 
       console.log("[FloatingWindow] Audio capture started!");
     } catch (err) {
       console.error("[FloatingWindow] Failed to start audio:", err);
-      // Provide more specific error messages
       if (err instanceof DOMException) {
         if (err.name === "NotAllowedError") {
           setError("Mic denied");
@@ -179,34 +184,64 @@ export function FloatingWindow() {
       } else {
         setError("Mic error");
       }
-      // Clean up any partial initialization
       stopAudioCapture();
     } finally {
       isStartingRef.current = false;
     }
   }, [updateBars, stopAudioCapture]);
 
-  useEffect(() => {
-    const unlistenExpanded = listen<boolean>("floating-expanded", async (event) => {
-      setIsActive(event.payload);
-      if (event.payload) {
-        setError(null);
-        setIsProcessing(false);
-        // Load shortcuts from store
-        const savedCancelShortcut = await store.get<string>("cancelShortcut");
-        const savedRecordingShortcut = await store.get<string>("shortcut");
-        if (savedCancelShortcut) {
-          setCancelShortcut(savedCancelShortcut);
-        }
-        if (savedRecordingShortcut) {
-          setRecordingShortcut(savedRecordingShortcut);
-        }
-        startAudioCapture();
-      } else {
-        stopAudioCapture();
-        setIsProcessing(false);
+  const checkEnabledRules = useCallback(async () => {
+    try {
+      const rulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
+      if (rulesJson) {
+        const parsedRules: TranscriptionRule[] = JSON.parse(rulesJson);
+        const hasEnabled = parsedRules.some((r) => r.enabled);
+        setHasEnabledRules(hasEnabled);
       }
-    });
+    } catch (err) {
+      console.error("Failed to load rules:", err);
+    }
+  }, []);
+
+  const setRulesMode = useCallback(async (skip: boolean) => {
+    setSkipRules(skip);
+    try {
+      await store.set(STORE_KEYS.SKIP_RULES_ONCE, skip ? "true" : "false");
+    } catch (err) {
+      console.error("Failed to save skip rules:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    const unlistenExpanded = listen<boolean>(
+      "floating-expanded",
+      async (event) => {
+        setIsActive(event.payload);
+        if (event.payload) {
+          setError(null);
+          setIsProcessing(false);
+          setSkipRules(false);
+          await store.set(STORE_KEYS.SKIP_RULES_ONCE, "false");
+          const savedCancelShortcut = await store.get<string>(
+            STORE_KEYS.CANCEL_SHORTCUT
+          );
+          const savedRecordingShortcut = await store.get<string>(
+            STORE_KEYS.SHORTCUT
+          );
+          if (savedCancelShortcut) {
+            setCancelShortcut(savedCancelShortcut);
+          }
+          if (savedRecordingShortcut) {
+            setRecordingShortcut(savedRecordingShortcut);
+          }
+          checkEnabledRules();
+          startAudioCapture();
+        } else {
+          stopAudioCapture();
+          setIsProcessing(false);
+        }
+      }
+    );
 
     const unlistenError = listen<string>("transcription-error", (event) => {
       setError(event.payload);
@@ -219,29 +254,94 @@ export function FloatingWindow() {
       }
     });
 
-    const unlistenProcessingMessage = listen<string>("processing-message", (event) => {
-      setProcessingMessage(event.payload);
-    });
+    const unlistenProcessingMessage = listen<string>(
+      "processing-message",
+      (event) => {
+        setProcessingMessage(event.payload);
+      }
+    );
 
     return () => {
-      // Clean up audio resources on unmount
       stopAudioCapture();
       unlistenExpanded.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenProcessing.then((fn) => fn());
       unlistenProcessingMessage.then((fn) => fn());
     };
-  }, [startAudioCapture, stopAudioCapture]);
+  }, [startAudioCapture, stopAudioCapture, checkEnabledRules]);
+
+  const handleDragStart = useCallback(async (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button")) {
+      return;
+    }
+    try {
+      await getCurrentWindow().startDragging();
+      const position = await getCurrentWindow().outerPosition();
+      await invoke("save_floating_position", {
+        x: position.x,
+        y: position.y,
+      });
+    } catch (err) {
+      console.error("Failed to drag window:", err);
+    }
+  }, []);
 
   if (!isActive) {
     return null;
   }
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-transparent select-none">
-      <div className="flex flex-col items-center gap-2 px-5 py-3 bg-gradient-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in">
+    <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden">
+      <div
+        className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in cursor-move"
+        onMouseDown={handleDragStart}
+      >
         {/* Main status area */}
-        <div className="flex items-center justify-center min-h-[36px]">
+        <div className="flex items-center justify-center min-h-[36px] gap-3">
+          {/* Options dropdown - only show if there are enabled rules */}
+          {!isProcessing && !error && hasEnabledRules && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={`
+                    flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200
+                    ${
+                      skipRules
+                        ? "bg-orange-500/30 text-orange-300"
+                        : "bg-violet-500/30 text-violet-300"
+                    }
+                  `}
+                  title="Rules options"
+                >
+                  <GearIcon />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="bottom">
+                <DropdownMenuLabel>Rules</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={() => setRulesMode(false)}
+                  className={
+                    !skipRules ? "bg-violet-500/20 text-violet-300" : ""
+                  }
+                >
+                  {!skipRules && <CheckIcon />}
+                  <span className={!skipRules ? "" : "ml-5"}>
+                    Default rules
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setRulesMode(true)}
+                  className={
+                    skipRules ? "bg-orange-500/20 text-orange-300" : ""
+                  }
+                >
+                  {skipRules && <CheckIcon />}
+                  <span className={skipRules ? "" : "ml-5"}>None</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
           {isProcessing ? (
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
@@ -256,7 +356,7 @@ export function FloatingWindow() {
               {barHeights.map((height, i) => (
                 <div
                   key={i}
-                  className="w-[3px] bg-gradient-to-t from-violet-500 to-pink-400 rounded-full transition-all duration-75"
+                  className="w-[3px] bg-linear-to-t from-violet-500 to-pink-400 rounded-full transition-all duration-75"
                   style={{ height: `${height}px` }}
                 />
               ))}
