@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAudioRecorder } from "./useAudioRecorder";
-import type { Provider } from "./useSettings";
 
-export function useRealtimeTranscription(apiKey: string, provider: Provider = "openai") {
+export function useRealtimeTranscription() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcription, setTranscription] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -26,25 +25,20 @@ export function useRealtimeTranscription(apiKey: string, provider: Provider = "o
     useAudioRecorder(handleAudioChunk);
 
   const startRecording = useCallback(async () => {
-    if (!apiKey) {
-      console.error("API key is required");
-      return;
-    }
-
     try {
       isRecordingRef.current = true;
       setIsRecording(true);
       setTranscription("");
       setIsProcessing(false);
 
-      await invoke("start_recording", { apiKey, provider });
+      await invoke("start_recording");
       await startAudio();
     } catch (err) {
       console.error("Failed to start recording:", err);
       isRecordingRef.current = false;
       setIsRecording(false);
     }
-  }, [apiKey, provider, startAudio]);
+  }, [startAudio]);
 
   const stopRecording = useCallback(async () => {
     try {

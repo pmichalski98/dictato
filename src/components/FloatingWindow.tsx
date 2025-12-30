@@ -7,12 +7,24 @@ const TARGET_SAMPLE_RATE = 24000;
 const store = new LazyStore("settings.json");
 const BAR_COUNT = 24;
 const MIN_BAR_HEIGHT = 4;
-const MAX_BAR_HEIGHT = 28;
+const MAX_BAR_HEIGHT = 32;
+const VOICE_AMPLIFICATION = 2.5; // Boost voice frequencies for more visible movement
+
+function formatShortcut(shortcut: string): string {
+  return shortcut
+    .replace(/CommandOrControl/g, "Ctrl")
+    .replace(/ArrowUp/g, "↑")
+    .replace(/ArrowDown/g, "↓")
+    .replace(/ArrowLeft/g, "←")
+    .replace(/ArrowRight/g, "→");
+}
 
 export function FloatingWindow() {
   const [isActive, setIsActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelShortcut, setCancelShortcut] = useState("Escape");
+  const [recordingShortcut, setRecordingShortcut] = useState("Ctrl+Shift+Space");
   const [barHeights, setBarHeights] = useState<number[]>(
     Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
   );
@@ -43,8 +55,10 @@ export function FloatingWindow() {
         sum += dataArray[j];
       }
       const avg = sum / binSize;
+      // Apply amplification and clamp to [0, 255]
+      const amplified = Math.min(255, avg * VOICE_AMPLIFICATION);
       const height =
-        MIN_BAR_HEIGHT + (avg / 255) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
+        MIN_BAR_HEIGHT + (amplified / 255) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
       newHeights.push(height);
     }
 
@@ -119,7 +133,7 @@ export function FloatingWindow() {
 
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.7;
+      analyser.smoothingTimeConstant = 0.4; // Lower = more responsive to voice
       analyserRef.current = analyser;
 
       await audioContext.audioWorklet.addModule("/audio-processor.js");
@@ -172,11 +186,20 @@ export function FloatingWindow() {
   }, [updateBars, stopAudioCapture]);
 
   useEffect(() => {
-    const unlistenExpanded = listen<boolean>("floating-expanded", (event) => {
+    const unlistenExpanded = listen<boolean>("floating-expanded", async (event) => {
       setIsActive(event.payload);
       if (event.payload) {
         setError(null);
         setIsProcessing(false);
+        // Load shortcuts from store
+        const savedCancelShortcut = await store.get<string>("cancelShortcut");
+        const savedRecordingShortcut = await store.get<string>("shortcut");
+        if (savedCancelShortcut) {
+          setCancelShortcut(savedCancelShortcut);
+        }
+        if (savedRecordingShortcut) {
+          setRecordingShortcut(savedRecordingShortcut);
+        }
         startAudioCapture();
       } else {
         stopAudioCapture();
@@ -207,25 +230,47 @@ export function FloatingWindow() {
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-transparent select-none">
-      <div className="flex items-center gap-3 px-4 py-2 bg-black/90 rounded-full border border-white/10 backdrop-blur-xl animate-fade-in">
-        {isProcessing ? (
-          <>
-            <div className="w-4 h-4 border-2 border-white/30 border-t-white/90 rounded-full animate-spin" />
-            <span className="text-sm text-white/60 font-medium">
-              Transcribing...
+      <div className="flex flex-col items-center gap-2 px-5 py-3 bg-gradient-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in">
+        {/* Main status area */}
+        <div className="flex items-center justify-center min-h-[36px]">
+          {isProcessing ? (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
+              <span className="text-sm text-white/70 font-medium">
+                Transcribing...
+              </span>
+            </div>
+          ) : error ? (
+            <span className="text-sm text-red-400 font-medium">{error}</span>
+          ) : (
+            <div className="flex items-center gap-[3px] h-8">
+              {barHeights.map((height, i) => (
+                <div
+                  key={i}
+                  className="w-[3px] bg-gradient-to-t from-violet-500 to-pink-400 rounded-full transition-all duration-75"
+                  style={{ height: `${height}px` }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Hints row */}
+        {!isProcessing && !error && (
+          <div className="flex items-center gap-4 text-[11px] text-white/40">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
+                {formatShortcut(cancelShortcut)}
+              </kbd>
+              <span>cancel</span>
             </span>
-          </>
-        ) : error ? (
-          <span className="text-sm text-red-400 font-medium">{error}</span>
-        ) : (
-          <div className="flex items-center gap-[2px] h-8">
-            {barHeights.map((height, i) => (
-              <div
-                key={i}
-                className="w-[3px] bg-white/90 rounded-full"
-                style={{ height: `${height}px` }}
-              />
-            ))}
+            <span className="text-white/20">|</span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
+                {formatShortcut(recordingShortcut)}
+              </kbd>
+              <span>finish</span>
+            </span>
           </div>
         )}
       </div>
