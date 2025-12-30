@@ -1,11 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Provider, useSettings } from "../hooks/useSettings";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select } from "./ui/select";
+
+interface AudioDevice {
+  deviceId: string;
+  label: string;
+}
 
 const STATUS_RESET_DELAY_MS = 2000;
 
@@ -59,8 +64,8 @@ function ApiKeyInput({
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
-      <div className="flex gap-3 ">       
-         <div className="relative w-full">
+      <div className="flex gap-3 ">
+        <div className="relative w-full">
           <Input
             type={isRevealed ? "text" : "password"}
             value={value}
@@ -68,7 +73,7 @@ function ApiKeyInput({
             placeholder={placeholder}
             className="pr-10 w-full"
           />
-          <button 
+          <button
             type="button"
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setIsRevealed(!isRevealed)}
@@ -97,6 +102,8 @@ export function Settings() {
     updateProvider,
     updateLanguage,
     updateShortcut,
+    updateMicrophoneDeviceId,
+    updateAutoPaste,
   } = useSettings();
   const [localApiKey, setLocalApiKey] = useState("");
   const [localGroqApiKey, setLocalGroqApiKey] = useState("");
@@ -105,7 +112,43 @@ export function Settings() {
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [groqStatus, setGroqStatus] = useState<SaveStatus>("idle");
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<AudioDevice[]>([]);
+  const [micPermissionStatus, setMicPermissionStatus] = useState<
+    "granted" | "denied" | "prompt" | "unknown"
+  >("unknown");
+  const [isLoadingMics, setIsLoadingMics] = useState(false);
 
+  const loadMicrophones = useCallback(async () => {
+    setIsLoadingMics(true);
+    try {
+      // First request permission to get labeled devices
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+
+      setMicPermissionStatus("granted");
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
+        }));
+
+      setMicrophones(audioInputs);
+    } catch (err) {
+      console.error("Failed to enumerate microphones:", err);
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        setMicPermissionStatus("denied");
+      }
+    } finally {
+      setIsLoadingMics(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMicrophones();
+  }, [loadMicrophones]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -186,7 +229,11 @@ export function Settings() {
         const shortcut = [...modifiers, mainKey].join("+");
 
         // Block shortcuts that conflict with paste (used after transcription)
-        const blocked = ["CommandOrControl+V", "CommandOrControl+C", "CommandOrControl+X"];
+        const blocked = [
+          "CommandOrControl+V",
+          "CommandOrControl+C",
+          "CommandOrControl+X",
+        ];
         if (blocked.includes(shortcut)) {
           setShortcutError("Conflicts with clipboard");
           setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
@@ -248,6 +295,70 @@ export function Settings() {
           </Select>
         </div>
 
+        {/* Microphone Device */}
+        <div className="space-y-2">
+          <Label>Microphone</Label>
+          {micPermissionStatus === "denied" ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <div className="w-2 h-2 rounded-full bg-red-500" />
+                <span className="text-sm text-red-400">
+                  Microphone access denied
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Grant microphone permission in System Settings → Privacy &
+                Security → Microphone
+              </p>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Select
+                value={settings.microphoneDeviceId || ""}
+                onChange={(e) => updateMicrophoneDeviceId(e.target.value)}
+                disabled={isLoadingMics || microphones.length === 0}
+                className="flex-1"
+              >
+                <option value="">Default microphone</option>
+                {microphones.map((mic) => (
+                  <option key={mic.deviceId} value={mic.deviceId}>
+                    {mic.label}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                variant="secondary"
+                size="icon"
+                onClick={loadMicrophones}
+                disabled={isLoadingMics}
+                title="Refresh microphone list"
+              >
+                <RefreshCw
+                  size={16}
+                  className={isLoadingMics ? "animate-spin" : ""}
+                />
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Auto-paste Toggle */}
+        <div className="space-y-2">
+          <Label>Auto-paste</Label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.autoPaste}
+              onChange={(e) => updateAutoPaste(e.target.checked)}
+              className="w-5 h-5 rounded border-border bg-input accent-primary cursor-pointer"
+            />
+            <span className="text-sm text-muted-foreground">
+              Automatically paste transcription (requires Accessibility
+              permission)
+            </span>
+          </label>
+        </div>
+
         {/* OpenAI API Key */}
         <ApiKeyInput
           label="OpenAI API Key"
@@ -293,14 +404,16 @@ export function Settings() {
             <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
               <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
               <div className="flex flex-col gap-0.5">
-                <span className="text-sm text-red-400 font-medium">{shortcutError}</span>
-                <span className="text-xs text-muted-foreground">Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space</span>
+                <span className="text-sm text-red-400 font-medium">
+                  {shortcutError}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
+                </span>
               </div>
             </div>
           )}
         </div>
-
-       
       </div>
 
       <footer className="mt-auto pt-6 text-center">

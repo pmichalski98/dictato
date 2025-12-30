@@ -50,10 +50,6 @@ impl GroqState {
             .map(|b| b.clone())
             .map_err(|e| format!("Buffer lock poisoned: {}", e))
     }
-
-    pub fn buffer_size(&self) -> usize {
-        self.audio_buffer.lock().map(|b| b.len()).unwrap_or(0)
-    }
 }
 
 fn create_wav_header(data_len: u32, sample_rate: u32, channels: u16, bits_per_sample: u16) -> Vec<u8> {
