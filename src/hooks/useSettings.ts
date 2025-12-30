@@ -1,24 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
-export type Provider = "openai" | "groq";
-
 interface Settings {
-  apiKey: string;
   groqApiKey: string;
-  provider: Provider;
   language: string;
   shortcut: string;
+  cancelShortcut: string;
   microphoneDeviceId: string;
   autoPaste: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  apiKey: "",
   groqApiKey: "",
-  provider: "openai",
   language: "en",
   shortcut: "CommandOrControl+Shift+Space",
+  cancelShortcut: "Escape",
   microphoneDeviceId: "",
   autoPaste: true,
 };
@@ -32,20 +28,18 @@ export function useSettings() {
   useEffect(() => {
     async function loadSettings() {
       try {
-        const apiKey = await store.get<string>("apiKey");
         const groqApiKey = await store.get<string>("groqApiKey");
-        const provider = await store.get<Provider>("provider");
         const language = await store.get<string>("language");
         const shortcut = await store.get<string>("shortcut");
+        const cancelShortcut = await store.get<string>("cancelShortcut");
         const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
         const autoPaste = await store.get<string>("autoPaste");
 
         setSettings({
-          apiKey: apiKey ?? DEFAULT_SETTINGS.apiKey,
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
-          provider: provider ?? DEFAULT_SETTINGS.provider,
           language: language ?? DEFAULT_SETTINGS.language,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
+          cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
           autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
         });
@@ -59,15 +53,6 @@ export function useSettings() {
     loadSettings();
   }, []);
 
-  const updateApiKey = useCallback(async (apiKey: string) => {
-    try {
-      await store.set("apiKey", apiKey);
-      setSettings((prev) => ({ ...prev, apiKey }));
-    } catch (err) {
-      console.error("Failed to save API key:", err);
-    }
-  }, []);
-
   const updateShortcut = useCallback(async (shortcut: string) => {
     try {
       await store.set("shortcut", shortcut);
@@ -77,21 +62,21 @@ export function useSettings() {
     }
   }, []);
 
+  const updateCancelShortcut = useCallback(async (cancelShortcut: string) => {
+    try {
+      await store.set("cancelShortcut", cancelShortcut);
+      setSettings((prev) => ({ ...prev, cancelShortcut }));
+    } catch (err) {
+      console.error("Failed to save cancel shortcut:", err);
+    }
+  }, []);
+
   const updateGroqApiKey = useCallback(async (groqApiKey: string) => {
     try {
       await store.set("groqApiKey", groqApiKey);
       setSettings((prev) => ({ ...prev, groqApiKey }));
     } catch (err) {
       console.error("Failed to save Groq API key:", err);
-    }
-  }, []);
-
-  const updateProvider = useCallback(async (provider: Provider) => {
-    try {
-      await store.set("provider", provider);
-      setSettings((prev) => ({ ...prev, provider }));
-    } catch (err) {
-      console.error("Failed to save provider:", err);
     }
   }, []);
 
@@ -125,11 +110,10 @@ export function useSettings() {
   return {
     settings,
     isLoading,
-    updateApiKey,
     updateGroqApiKey,
-    updateProvider,
     updateLanguage,
     updateShortcut,
+    updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
   };

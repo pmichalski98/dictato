@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Provider, useSettings } from "../hooks/useSettings";
+import { useSettings } from "../hooks/useSettings";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -97,21 +97,21 @@ export function Settings() {
   const {
     settings,
     isLoading,
-    updateApiKey,
     updateGroqApiKey,
-    updateProvider,
     updateLanguage,
     updateShortcut,
+    updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
   } = useSettings();
-  const [localApiKey, setLocalApiKey] = useState("");
   const [localGroqApiKey, setLocalGroqApiKey] = useState("");
   const [localShortcut, setLocalShortcut] = useState("");
+  const [localCancelShortcut, setLocalCancelShortcut] = useState("");
   const [isCapturing, setIsCapturing] = useState(false);
-  const [status, setStatus] = useState<SaveStatus>("idle");
+  const [isCapturingCancel, setIsCapturingCancel] = useState(false);
   const [groqStatus, setGroqStatus] = useState<SaveStatus>("idle");
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [cancelShortcutError, setCancelShortcutError] = useState<string | null>(null);
   const [microphones, setMicrophones] = useState<AudioDevice[]>([]);
   const [micPermissionStatus, setMicPermissionStatus] = useState<
     "granted" | "denied" | "prompt" | "unknown"
@@ -152,9 +152,9 @@ export function Settings() {
 
   useEffect(() => {
     if (!isLoading) {
-      setLocalApiKey(settings.apiKey);
       setLocalGroqApiKey(settings.groqApiKey);
       setLocalShortcut(settings.shortcut);
+      setLocalCancelShortcut(settings.cancelShortcut);
     }
   }, [isLoading, settings]);
 
@@ -165,17 +165,6 @@ export function Settings() {
       );
     }
   }, [settings.shortcut]);
-
-  const handleSaveApiKey = useCallback(async () => {
-    try {
-      await updateApiKey(localApiKey);
-      setStatus("saved");
-      setTimeout(() => setStatus("idle"), STATUS_RESET_DELAY_MS);
-    } catch {
-      setStatus("error");
-      setTimeout(() => setStatus("idle"), STATUS_RESET_DELAY_MS);
-    }
-  }, [localApiKey, updateApiKey]);
 
   const handleSaveGroqApiKey = useCallback(async () => {
     try {
@@ -240,12 +229,85 @@ export function Settings() {
           return;
         }
 
+        // Check for conflict with cancel shortcut
+        if (shortcut === settings.cancelShortcut) {
+          setShortcutError("Same as cancel shortcut");
+          setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
+          return;
+        }
+
         setLocalShortcut(shortcut);
         updateShortcut(shortcut);
         setIsCapturing(false);
       }
     },
-    [updateShortcut]
+    [updateShortcut, settings.cancelShortcut]
+  );
+
+  const handleStartCancelCapture = useCallback(() => {
+    setIsCapturingCancel(true);
+    setCancelShortcutError(null);
+    invoke("unregister_shortcuts").catch(console.error);
+  }, []);
+
+  const handleStopCancelCapture = useCallback(() => {
+    setIsCapturingCancel(false);
+    // Re-register shortcuts if capture cancelled
+    if (settings.shortcut) {
+      invoke("register_shortcut", { shortcutStr: settings.shortcut }).catch(
+        console.error
+      );
+    }
+  }, [settings.shortcut]);
+
+  const handleCaptureCancelShortcut = useCallback(
+    (e: React.KeyboardEvent) => {
+      e.preventDefault();
+
+      const key = e.key;
+
+      // For cancel shortcut, allow single keys like Escape
+      if (key === "Escape") {
+        setLocalCancelShortcut("Escape");
+        updateCancelShortcut("Escape");
+        invoke("register_cancel_shortcut", { shortcutStr: "Escape" }).catch(console.error);
+        setIsCapturingCancel(false);
+        return;
+      }
+
+      const modifiers: string[] = [];
+      if (e.metaKey || e.ctrlKey) modifiers.push("CommandOrControl");
+      if (e.altKey) modifiers.push("Alt");
+      if (e.shiftKey) modifiers.push("Shift");
+
+      let mainKey: string | null = null;
+
+      if (key.length === 1 && key !== " ") {
+        mainKey = key.toUpperCase();
+      } else if (key === " ") {
+        mainKey = "Space";
+      } else if (!["Control", "Alt", "Shift", "Meta"].includes(key)) {
+        mainKey = key;
+      }
+
+      // Allow modifier + key combinations
+      if (modifiers.length > 0 && mainKey) {
+        const shortcut = [...modifiers, mainKey].join("+");
+
+        // Check for conflict with recording shortcut
+        if (shortcut === settings.shortcut) {
+          setCancelShortcutError("Same as recording shortcut");
+          setTimeout(() => setCancelShortcutError(null), STATUS_RESET_DELAY_MS);
+          return;
+        }
+
+        setLocalCancelShortcut(shortcut);
+        updateCancelShortcut(shortcut);
+        invoke("register_cancel_shortcut", { shortcutStr: shortcut }).catch(console.error);
+        setIsCapturingCancel(false);
+      }
+    },
+    [updateCancelShortcut, settings.shortcut]
   );
 
   if (isLoading) {
@@ -268,18 +330,6 @@ export function Settings() {
       </header>
 
       <div className="space-y-6 flex-1">
-        {/* Provider */}
-        <div className="space-y-2">
-          <Label>Transcription Provider</Label>
-          <Select
-            value={settings.provider}
-            onChange={(e) => updateProvider(e.target.value as Provider)}
-          >
-            <option value="openai">OpenAI (live streaming)</option>
-            <option value="groq">Groq Whisper Turbo (faster)</option>
-          </Select>
-        </div>
-
         {/* Language */}
         <div className="space-y-2">
           <Label>Language</Label>
@@ -359,16 +409,6 @@ export function Settings() {
           </label>
         </div>
 
-        {/* OpenAI API Key */}
-        <ApiKeyInput
-          label="OpenAI API Key"
-          value={localApiKey}
-          onChange={setLocalApiKey}
-          onSave={handleSaveApiKey}
-          status={status}
-          placeholder="sk-..."
-        />
-
         {/* Groq API Key */}
         <ApiKeyInput
           label="Groq API Key"
@@ -411,6 +451,37 @@ export function Settings() {
                   Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
                 </span>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Cancel Shortcut */}
+        <div className="space-y-2">
+          <Label>Cancel Shortcut</Label>
+          <Input
+            type="text"
+            value={formatShortcut(localCancelShortcut)}
+            readOnly
+            onFocus={handleStartCancelCapture}
+            onBlur={handleStopCancelCapture}
+            onKeyDown={isCapturingCancel ? handleCaptureCancelShortcut : undefined}
+            placeholder="Click and press keys..."
+            capturing={isCapturingCancel}
+            error={!!cancelShortcutError}
+          />
+          {/* Hint - only show when capturing and no error */}
+          {isCapturingCancel && !cancelShortcutError && (
+            <p className="text-xs text-muted-foreground animate-pulse">
+              Press Escape or a key combination...
+            </p>
+          )}
+          {/* Error message */}
+          {cancelShortcutError && (
+            <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+              <span className="text-sm text-red-400 font-medium">
+                {cancelShortcutError}
+              </span>
             </div>
           )}
         </div>
