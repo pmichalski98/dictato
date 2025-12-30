@@ -1,23 +1,32 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Outfit", Inter, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+  /* macOS system font stack */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, monospace;
 
-  /* Colors - softer dark theme */
-  --color-background: #1a1a1f;
-  --color-foreground: #e8e8eb;
-  --color-input: #232328;
-  --color-border: #333338;
+  /* macOS-inspired dark theme */
+  --color-background: #1c1c1e;
+  --color-foreground: #f5f5f7;
+  --color-input: #2c2c2e;
+  --color-border: #38383a;
   --color-ring: #8b5cf6;
   --color-primary: #8b5cf6;
   --color-primary-foreground: #ffffff;
-  --color-muted: #3f3f46;
-  --color-muted-foreground: #9a9aa3;
+  --color-muted: #48484a;
+  --color-muted-foreground: #98989d;
   --color-secondary: #ec4899;
-  --color-destructive: #ef4444;
+  --color-destructive: #ff453a;
   --color-destructive-foreground: #fca5a5;
-  --color-card: #222227;
+  --color-card: #242426;
+
+  /* Typography scale - macOS native sizing */
+  --text-xs: 0.6875rem; /* 11px */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-base: 0.8125rem; /* 13px - macOS body */
+  --text-lg: 1rem; /* 16px */
+  --text-xl: 1.25rem; /* 20px */
 
   /* Animation */
   --animate-pulse-border: pulse-border 2s ease-in-out infinite;
@@ -62,6 +71,10 @@ body {
   font-family: var(--font-sans);
   background-color: var(--color-background);
   color: var(--color-foreground);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Transparent background for floating window */
@@ -71,15 +84,15 @@ body.floating-window {
 
 /* Custom dropdown arrow for selects */
 select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2398989d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 12px center;
+  background-position: right 8px center;
 }
 
-/* Custom scrollbar */
+/* macOS-style scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -87,10 +100,10 @@ select {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted);
+  background: rgba(255, 255, 255, 0.25);
 }

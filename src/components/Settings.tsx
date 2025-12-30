@@ -5,6 +5,7 @@ import { useSettings } from "../hooks/useSettings";
 import { formatShortcut } from "@/lib/shortcuts";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
+import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select } from "./ui/select";
@@ -61,24 +62,24 @@ function ApiKeyInput({
   const [isRevealed, setIsRevealed] = useState(false);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <Label>{label}</Label>
-      <div className="flex gap-3 ">
+      <div className="flex gap-1.5">
         <div className="relative w-full">
           <Input
             type={isRevealed ? "text" : "password"}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            className="pr-10 w-full"
+            className="pr-8 w-full"
           />
           <button
             type="button"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setIsRevealed(!isRevealed)}
             tabIndex={-1}
           >
-            {isRevealed ? <Eye size={18} /> : <EyeOff size={18} />}
+            {isRevealed ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
         </div>
         <Button
@@ -308,28 +309,28 @@ export function Settings() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background p-8 flex items-center justify-center text-muted-foreground">
+      <div className="min-h-screen bg-background p-5 flex items-center justify-center text-muted-foreground text-[13px]">
         Loading...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-8 flex flex-col overflow-auto">
-      <header className="mb-8">
-        <h1 className="text-3xl font-semibold bg-linear-to-r from-pink-400 via-violet-400 to-blue-400 bg-clip-text text-transparent">
+    <div className="min-h-screen bg-background text-foreground p-5 flex flex-col overflow-auto">
+      <header className="mb-5">
+        <h1 className="text-xl font-semibold bg-linear-to-r from-pink-400 via-violet-400 to-blue-400 bg-clip-text text-transparent">
           Dictato
         </h1>
-        <p className="text-muted-foreground text-sm font-light mt-1">
+        <p className="text-muted-foreground text-[11px] mt-0.5">
           Voice to text, instantly
         </p>
       </header>
 
-      <div className="space-y-4 flex-1">
+      <div className="space-y-2.5 flex-1">
         {/* Audio Settings Section */}
-        <Card className="space-y-4">
+        <Card className="space-y-3">
           {/* Language */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <Label>Language</Label>
             <Select
               value={settings.language}
@@ -344,23 +345,23 @@ export function Settings() {
           </div>
 
           {/* Microphone Device */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <Label>Microphone</Label>
             {micPermissionStatus === "denied" ? (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                  <div className="w-2 h-2 rounded-full bg-red-500" />
-                  <span className="text-sm text-red-400">
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 px-2 py-1.5 bg-destructive/10 border border-destructive/20 rounded-md">
+                  <div className="w-1.5 h-1.5 rounded-full bg-destructive" />
+                  <span className="text-[12px] text-destructive-foreground">
                     Microphone access denied
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-[11px] text-muted-foreground">
                   Grant microphone permission in System Settings → Privacy &
                   Security → Microphone
                 </p>
               </div>
             ) : (
-              <div className="flex gap-2">
+              <div className="flex gap-1.5">
                 <Select
                   value={settings.microphoneDeviceId || ""}
                   onChange={(e) => updateMicrophoneDeviceId(e.target.value)}
@@ -382,7 +383,7 @@ export function Settings() {
                   title="Refresh microphone list"
                 >
                   <RefreshCw
-                    size={16}
+                    size={14}
                     className={isLoadingMics ? "animate-spin" : ""}
                   />
                 </Button>
@@ -391,16 +392,14 @@ export function Settings() {
           </div>
 
           {/* Auto-paste Toggle */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <Label>Auto-paste</Label>
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
                 checked={settings.autoPaste}
-                onChange={(e) => updateAutoPaste(e.target.checked)}
-                className="w-5 h-5 rounded border-border bg-input accent-primary cursor-pointer"
+                onCheckedChange={updateAutoPaste}
               />
-              <span className="text-sm text-muted-foreground">
+              <span className="text-[12px] text-muted-foreground">
                 Automatically paste transcription (requires Accessibility
                 permission)
               </span>
@@ -430,9 +429,9 @@ export function Settings() {
         />
 
         {/* Shortcuts Section */}
-        <Card className="space-y-4">
+        <Card className="space-y-3">
           {/* Recording Shortcut */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <Label>Recording Shortcut</Label>
             <Input
               type="text"
@@ -447,19 +446,19 @@ export function Settings() {
             />
             {/* Hint - only show when capturing and no error */}
             {isCapturing && !shortcutError && (
-              <p className="text-xs text-muted-foreground animate-pulse">
+              <p className="text-[11px] text-muted-foreground animate-pulse">
                 Press your key combination...
               </p>
             )}
             {/* Error message - separate row with clear visual treatment */}
             {shortcutError && (
-              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+              <div className="flex items-center gap-2 px-2 py-1.5 bg-destructive/10 border border-destructive/20 rounded-md">
+                <div className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
                 <div className="flex flex-col gap-0.5">
-                  <span className="text-sm text-red-400 font-medium">
+                  <span className="text-[12px] text-destructive-foreground font-medium">
                     {shortcutError}
                   </span>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-[11px] text-muted-foreground">
                     Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
                   </span>
                 </div>
@@ -468,7 +467,7 @@ export function Settings() {
           </div>
 
           {/* Cancel Shortcut */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <Label>Cancel Shortcut</Label>
             <Input
               type="text"
@@ -483,15 +482,15 @@ export function Settings() {
             />
             {/* Hint - only show when capturing and no error */}
             {isCapturingCancel && !cancelShortcutError && (
-              <p className="text-xs text-muted-foreground animate-pulse">
+              <p className="text-[11px] text-muted-foreground animate-pulse">
                 Press Escape or a key combination...
               </p>
             )}
             {/* Error message */}
             {cancelShortcutError && (
-              <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-                <span className="text-sm text-red-400 font-medium">
+              <div className="flex items-center gap-2 px-2 py-1.5 bg-destructive/10 border border-destructive/20 rounded-md">
+                <div className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
+                <span className="text-[12px] text-destructive-foreground font-medium">
                   {cancelShortcutError}
                 </span>
               </div>
@@ -500,10 +499,10 @@ export function Settings() {
         </Card>
       </div>
 
-      <footer className="mt-auto pt-6 text-center">
-        <p className="text-muted-foreground text-sm">
+      <footer className="mt-auto pt-4 text-center">
+        <p className="text-muted-foreground text-[11px]">
           Press{" "}
-          <code className="bg-primary/10 text-primary px-2 py-1 rounded font-mono text-xs">
+          <code className="bg-primary/10 text-primary px-1.5 py-0.5 rounded font-mono text-[11px]">
             {formatShortcut(settings.shortcut) || "your shortcut"}
           </code>{" "}
           anywhere to start dictating

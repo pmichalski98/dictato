@@ -50,11 +50,11 @@ export function RulesSection({
 
   return (
     <>
-      <Card className="space-y-3">
+      <Card className="space-y-2.5">
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-base">Transcription Rules</Label>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <Label className="text-[13px]">Transcription Rules</Label>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
               {enabledCount > 0
                 ? `${enabledCount} rule${enabledCount > 1 ? "s" : ""} active`
                 : "Enable rules to polish your transcriptions"}
@@ -62,7 +62,7 @@ export function RulesSection({
           </div>
         </div>
 
-        <div className="border border-border rounded-lg divide-y divide-border">
+        <div className="border border-border rounded-md divide-y divide-border">
           {rules.map((rule) => (
             <RuleItem
               key={rule.id}
@@ -78,8 +78,9 @@ export function RulesSection({
           variant="secondary"
           onClick={() => setIsDialogOpen(true)}
           className="w-full"
+          size="sm"
         >
-          <Plus className="h-4 w-4 mr-2" />
+          <Plus className="h-3.5 w-3.5 mr-1.5" />
           Add Custom Rule
         </Button>
       </Card>
