@@ -1,4 +1,5 @@
 mod groq;
+mod llm;
 
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
@@ -43,14 +44,43 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     } else {
         app.emit("processing-state", true).ok();
         let result = groq::transcribe(&api_key, audio_data, &language).await;
-        app.emit("processing-state", false).ok();
-        result?
+        match result {
+            Ok(text) => text,
+            Err(e) => {
+                app.emit("processing-state", false).ok();
+                return Err(e);
+            }
+        }
     };
 
+    // Apply transcription rules if any are enabled
+    let final_text = if !transcript.is_empty() {
+        let rules = get_transcription_rules_from_store(&app);
+        let has_enabled_rules = rules.iter().any(|r| r.enabled);
+        if has_enabled_rules {
+            app.emit("processing-message", "Applying rules...").ok();
+            match llm::process_with_rules(&api_key, &transcript, rules).await {
+                Ok(processed) => {
+                    println!("[Dictato] Rules applied successfully");
+                    processed
+                }
+                Err(e) => {
+                    eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
+                    transcript
+                }
+            }
+        } else {
+            transcript
+        }
+    } else {
+        transcript
+    };
+
+    app.emit("processing-state", false).ok();
     collapse_floating_window(&app)?;
 
-    if !transcript.is_empty() {
-        copy_and_paste(app, transcript).await?;
+    if !final_text.is_empty() {
+        copy_and_paste(app, final_text).await?;
     }
 
     Ok(())
@@ -262,6 +292,12 @@ fn get_language_from_store(app: &AppHandle) -> String {
 
 fn get_cancel_shortcut_from_store(app: &AppHandle) -> String {
     get_store_string(app, "cancelShortcut").unwrap_or_else(|| "Escape".to_string())
+}
+
+fn get_transcription_rules_from_store(app: &AppHandle) -> Vec<llm::TranscriptionRule> {
+    get_store_string(app, "transcriptionRules")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 #[tauri::command]

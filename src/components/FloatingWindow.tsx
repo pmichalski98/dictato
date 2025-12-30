@@ -22,6 +22,7 @@ function formatShortcut(shortcut: string): string {
 export function FloatingWindow() {
   const [isActive, setIsActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingMessage, setProcessingMessage] = useState("Transcribing...");
   const [error, setError] = useState<string | null>(null);
   const [cancelShortcut, setCancelShortcut] = useState("Escape");
   const [recordingShortcut, setRecordingShortcut] = useState("Ctrl+Shift+Space");
@@ -213,6 +214,13 @@ export function FloatingWindow() {
 
     const unlistenProcessing = listen<boolean>("processing-state", (event) => {
       setIsProcessing(event.payload);
+      if (event.payload) {
+        setProcessingMessage("Transcribing...");
+      }
+    });
+
+    const unlistenProcessingMessage = listen<string>("processing-message", (event) => {
+      setProcessingMessage(event.payload);
     });
 
     return () => {
@@ -221,6 +229,7 @@ export function FloatingWindow() {
       unlistenExpanded.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenProcessing.then((fn) => fn());
+      unlistenProcessingMessage.then((fn) => fn());
     };
   }, [startAudioCapture, stopAudioCapture]);
 
@@ -237,7 +246,7 @@ export function FloatingWindow() {
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
               <span className="text-sm text-white/70 font-medium">
-                Transcribing...
+                {processingMessage}
               </span>
             </div>
           ) : error ? (

@@ -7,6 +7,7 @@ import { Card } from "./ui/card";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select } from "./ui/select";
+import { RulesSection } from "./RulesSection";
 
 interface AudioDevice {
   deviceId: string;
@@ -104,6 +105,10 @@ export function Settings() {
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    toggleRule,
+    addRule,
+    updateRule,
+    deleteRule,
   } = useSettings();
   const [localGroqApiKey, setLocalGroqApiKey] = useState("");
   const [localShortcut, setLocalShortcut] = useState("");
@@ -424,6 +429,15 @@ export function Settings() {
             placeholder="gsk_..."
           />
         </Card>
+
+        {/* Transcription Rules Section */}
+        <RulesSection
+          rules={settings.transcriptionRules}
+          onToggle={toggleRule}
+          onAdd={addRule}
+          onUpdate={updateRule}
+          onDelete={deleteRule}
+        />
 
         {/* Shortcuts Section */}
         <Card className="space-y-4">
