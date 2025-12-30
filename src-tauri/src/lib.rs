@@ -124,8 +124,18 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn unregister_shortcuts(app: AppHandle) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), String> {
     let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("{:?}", e))?;
+
+    // Unregister all shortcuts first to avoid duplicates
+    app.global_shortcut().unregister_all().ok();
 
     let app_clone = app.clone();
     app.global_shortcut()
@@ -299,6 +309,7 @@ pub fn run() {
             send_audio_chunk,
             copy_and_paste,
             register_shortcut,
+            unregister_shortcuts,
             get_recording_state,
             set_floating_x,
         ])
