@@ -1,12 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useSettings, Provider } from "../hooks/useSettings";
-import { useRealtimeTranscription } from "../hooks/useRealtimeTranscription";
-import { cn } from "@/lib/utils";
+import { Eye, EyeOff } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Provider, useSettings } from "../hooks/useSettings";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Select } from "./ui/select";
 import { Label } from "./ui/label";
+import { Select } from "./ui/select";
 
 const STATUS_RESET_DELAY_MS = 2000;
 
@@ -28,6 +27,16 @@ const SUPPORTED_LANGUAGES = [
 
 type SaveStatus = "idle" | "saved" | "error";
 
+// Format shortcut for display (shorter, more readable)
+function formatShortcut(shortcut: string): string {
+  return shortcut
+    .replace(/CommandOrControl/g, "Ctrl")
+    .replace(/ArrowUp/g, "↑")
+    .replace(/ArrowDown/g, "↓")
+    .replace(/ArrowLeft/g, "←")
+    .replace(/ArrowRight/g, "→");
+}
+
 interface ApiKeyInputProps {
   label: string;
   value: string;
@@ -45,16 +54,29 @@ function ApiKeyInput({
   status,
   placeholder,
 }: ApiKeyInputProps) {
+  const [isRevealed, setIsRevealed] = useState(false);
+
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
-      <div className="flex gap-3">
-        <Input
-          type="password"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-        />
+      <div className="flex gap-3 ">       
+         <div className="relative w-full">
+          <Input
+            type={isRevealed ? "text" : "password"}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="pr-10 w-full"
+          />
+          <button 
+            type="button"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setIsRevealed(!isRevealed)}
+            tabIndex={-1}
+          >
+            {isRevealed ? <Eye size={18} /> : <EyeOff size={18} />}
+          </button>
+        </div>
         <Button
           onClick={onSave}
           variant={status === "error" ? "destructive" : "default"}
@@ -82,13 +104,8 @@ export function Settings() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [groqStatus, setGroqStatus] = useState<SaveStatus>("idle");
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
-  const currentApiKey =
-    settings.provider === "openai" ? settings.apiKey : settings.groqApiKey;
-  const { isRecording, toggleRecording } = useRealtimeTranscription(
-    currentApiKey,
-    settings.provider
-  );
 
   useEffect(() => {
     if (!isLoading) {
@@ -128,26 +145,54 @@ export function Settings() {
     }
   }, [localGroqApiKey, updateGroqApiKey]);
 
+  const handleStartCapture = useCallback(() => {
+    setIsCapturing(true);
+    setShortcutError(null);
+    invoke("unregister_shortcuts").catch(console.error);
+  }, []);
+
+  const handleStopCapture = useCallback(() => {
+    setIsCapturing(false);
+    // Re-register current shortcut if capture cancelled
+    if (settings.shortcut) {
+      invoke("register_shortcut", { shortcutStr: settings.shortcut }).catch(
+        console.error
+      );
+    }
+  }, [settings.shortcut]);
+
   const handleCaptureShortcut = useCallback(
     (e: React.KeyboardEvent) => {
       e.preventDefault();
 
-      const parts: string[] = [];
-      if (e.metaKey || e.ctrlKey) parts.push("CommandOrControl");
-      if (e.altKey) parts.push("Alt");
-      if (e.shiftKey) parts.push("Shift");
+      const modifiers: string[] = [];
+      if (e.metaKey || e.ctrlKey) modifiers.push("CommandOrControl");
+      if (e.altKey) modifiers.push("Alt");
+      if (e.shiftKey) modifiers.push("Shift");
 
       const key = e.key;
+      let mainKey: string | null = null;
+
       if (key.length === 1 && key !== " ") {
-        parts.push(key.toUpperCase());
+        mainKey = key.toUpperCase();
       } else if (key === " ") {
-        parts.push("Space");
+        mainKey = "Space";
       } else if (!["Control", "Alt", "Shift", "Meta"].includes(key)) {
-        parts.push(key);
+        mainKey = key;
       }
 
-      if (parts.length > 1) {
-        const shortcut = parts.join("+");
+      // Need at least one modifier + one non-modifier key
+      if (modifiers.length > 0 && mainKey) {
+        const shortcut = [...modifiers, mainKey].join("+");
+
+        // Block shortcuts that conflict with paste (used after transcription)
+        const blocked = ["CommandOrControl+V", "CommandOrControl+C", "CommandOrControl+X"];
+        if (blocked.includes(shortcut)) {
+          setShortcutError("Conflicts with clipboard");
+          setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
+          return;
+        }
+
         setLocalShortcut(shortcut);
         updateShortcut(shortcut);
         setIsCapturing(false);
@@ -167,7 +212,7 @@ export function Settings() {
   return (
     <div className="min-h-screen bg-background text-foreground p-8 flex flex-col overflow-auto">
       <header className="mb-8">
-        <h1 className="text-3xl font-semibold bg-gradient-to-r from-pink-400 via-violet-400 to-blue-400 bg-clip-text text-transparent">
+        <h1 className="text-3xl font-semibold bg-linear-to-r from-pink-400 via-violet-400 to-blue-400 bg-clip-text text-transparent">
           Whisper Clone
         </h1>
         <p className="text-muted-foreground text-sm font-light mt-1">
@@ -228,54 +273,41 @@ export function Settings() {
           <Label>Recording Shortcut</Label>
           <Input
             type="text"
-            value={localShortcut}
+            value={formatShortcut(localShortcut)}
             readOnly
-            onFocus={() => setIsCapturing(true)}
-            onBlur={() => setIsCapturing(false)}
+            onFocus={handleStartCapture}
+            onBlur={handleStopCapture}
             onKeyDown={isCapturing ? handleCaptureShortcut : undefined}
             placeholder="Click and press keys..."
             capturing={isCapturing}
+            error={!!shortcutError}
           />
-          {isCapturing && (
-            <span className="text-xs text-secondary">
-              Press your desired key combination
-            </span>
+          {/* Hint - only show when capturing and no error */}
+          {isCapturing && !shortcutError && (
+            <p className="text-xs text-muted-foreground animate-pulse">
+              Press your key combination...
+            </p>
+          )}
+          {/* Error message - separate row with clear visual treatment */}
+          {shortcutError && (
+            <div className="flex items-center gap-3 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm text-red-400 font-medium">{shortcutError}</span>
+                <span className="text-xs text-muted-foreground">Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space</span>
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Status Section */}
-        <div className="flex items-center justify-between bg-input border border-border rounded-xl px-5 py-4">
-          <div
-            className={cn(
-              "flex items-center gap-2.5 text-sm text-muted-foreground",
-              isRecording && "text-foreground"
-            )}
-          >
-            <div
-              className={cn(
-                "w-2 h-2 rounded-full bg-muted transition-all",
-                isRecording &&
-                  "bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)]"
-              )}
-            />
-            <span>{isRecording ? "Recording..." : "Ready"}</span>
-          </div>
-          <Button
-            onClick={toggleRecording}
-            disabled={!currentApiKey}
-            variant={isRecording ? "destructive" : "secondary"}
-            size="sm"
-          >
-            {isRecording ? "Stop" : "Test Recording"}
-          </Button>
-        </div>
+       
       </div>
 
       <footer className="mt-auto pt-6 text-center">
         <p className="text-muted-foreground text-sm">
           Press{" "}
           <code className="bg-primary/10 text-primary px-2 py-1 rounded font-mono text-xs">
-            {settings.shortcut || "your shortcut"}
+            {formatShortcut(settings.shortcut) || "your shortcut"}
           </code>{" "}
           anywhere to start dictating
         </p>

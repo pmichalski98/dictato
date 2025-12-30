@@ -1,7 +1,6 @@
-# Tauri + React + Typescript
+[] - create few tabs, settings for shortcuts, auto start, auto updates, selected microphone device
+- history tab, with recorded messages, we can also show pre and after edit if edit mode is enabled
+- modes
+- api keys
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
-
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+ Hello, hello, I'm just checking if it works.
