@@ -15,6 +15,12 @@ interface AudioDevice {
   label: string;
 }
 
+interface NativeAudioDevice {
+  id: string;
+  name: string;
+  is_default: boolean;
+}
+
 const STATUS_RESET_DELAY_MS = 2000;
 
 const SUPPORTED_LANGUAGES = [
@@ -118,26 +124,19 @@ export function Settings() {
   const loadMicrophones = useCallback(async () => {
     setIsLoadingMics(true);
     try {
-      // First request permission to get labeled devices
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-
-      setMicPermissionStatus("granted");
-
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs = devices
-        .filter((device) => device.kind === "audioinput")
-        .map((device) => ({
-          deviceId: device.deviceId,
-          label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
-        }));
+      // Use native audio device enumeration (doesn't open a stream, no audio ducking)
+      const devices = await invoke<NativeAudioDevice[]>("list_audio_devices");
+      const audioInputs = devices.map((device) => ({
+        deviceId: device.id,
+        label: device.name,
+      }));
 
       setMicrophones(audioInputs);
+      setMicPermissionStatus("granted");
     } catch (err) {
       console.error("Failed to enumerate microphones:", err);
-      if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setMicPermissionStatus("denied");
-      }
+      // Native audio will show permission dialog when recording starts
+      setMicPermissionStatus("unknown");
     } finally {
       setIsLoadingMics(false);
     }

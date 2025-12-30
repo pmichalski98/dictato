@@ -1,9 +1,12 @@
+mod audio;
 mod groq;
 mod llm;
 
+use audio::{AudioCaptureHandle, AudioDevice};
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -19,6 +22,9 @@ const FLOATING_WINDOW_WIDTH: f64 = 320.0;
 const FLOATING_WINDOW_HEIGHT: f64 = 160.0;
 const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 
+// Audio processing constants
+const AUDIO_STOP_DRAIN_MS: u64 = 150; // Time to let receiver threads drain after audio stop
+
 // Store keys
 mod store_keys {
     pub const FLOATING_X: &str = "floatingX";
@@ -28,22 +34,85 @@ mod store_keys {
     pub const GROQ_API_KEY: &str = "groqApiKey";
     pub const LANGUAGE: &str = "language";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
-    pub const SHORTCUT: &str = "shortcut";
     pub const AUTO_PASTE: &str = "autoPaste";
     pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
 }
 
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
+pub struct AudioCaptureState {
+    handle: AudioCaptureHandle,
+}
+
+impl Default for AudioCaptureState {
+    fn default() -> Self {
+        Self {
+            handle: AudioCaptureHandle::new(),
+        }
+    }
+}
+
+#[tauri::command]
+fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    audio::list_input_devices()
+}
+
 #[tauri::command]
 async fn start_recording(app: AppHandle) -> Result<(), String> {
     IS_RECORDING.store(true, Ordering::SeqCst);
+
+    // Register cancel shortcut only while recording
+    let cancel_shortcut_str = get_cancel_shortcut_from_store(&app);
+    register_cancel_shortcut_internal(&app, &cancel_shortcut_str).ok();
 
     app.emit("recording-state", true).ok();
     expand_floating_window(&app)?;
 
     let groq_state = app.state::<GroqState>();
     groq_state.clear_buffer();
+
+    // Start native audio capture
+    let device_id = get_store_string(&app, store_keys::MICROPHONE_DEVICE_ID);
+    let audio_state = app.state::<AudioCaptureState>();
+
+    // Create channels for audio data and levels
+    let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>();
+    let (level_tx, level_rx) = mpsc::channel::<f32>();
+
+    // Start the audio capture
+    audio_state
+        .handle
+        .start(device_id, audio_tx, level_tx)?;
+
+    // Spawn task to receive audio data and store in buffer
+    let groq_state_clone = app.state::<GroqState>().inner().clone();
+    std::thread::spawn(move || {
+        let mut chunks_received: usize = 0;
+        let mut total_bytes: usize = 0;
+        while let Ok(audio_chunk) = audio_rx.recv() {
+            chunks_received += 1;
+            total_bytes += audio_chunk.len();
+            if let Err(e) = groq_state_clone.append_audio(audio_chunk) {
+                eprintln!("[Audio] Failed to append audio: {}", e);
+            }
+        }
+        println!(
+            "[Audio] Receiver thread finished: {} chunks, {} bytes total",
+            chunks_received, total_bytes
+        );
+    });
+
+    // Spawn task to receive audio levels and emit to frontend
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        // Small delay on first iteration to ensure frontend webview is ready
+        // (hidden windows may delay JS initialization until shown)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        while let Ok(level) = level_rx.recv() {
+            app_clone.emit("audio-level", level).ok();
+        }
+    });
+
     Ok(())
 }
 
@@ -52,15 +121,34 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     IS_RECORDING.store(false, Ordering::SeqCst);
     app.emit("recording-state", false).ok();
 
+    // Unregister cancel shortcut since recording stopped
+    unregister_cancel_shortcut(&app);
+
+    // Stop native audio capture
+    let audio_state = app.state::<AudioCaptureState>();
+    audio_state.handle.stop();
+
+    // Allow receiver threads to drain remaining audio data
+    tokio::time::sleep(std::time::Duration::from_millis(AUDIO_STOP_DRAIN_MS)).await;
+
     let groq_state = app.state::<GroqState>();
     let audio_data = groq_state.get_buffer()?;
+
+    println!("[Dictato] Audio buffer size: {} bytes", audio_data.len());
+
     groq_state.clear_buffer();
 
     let api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
     let language = get_language_from_store(&app);
     let transcript = if audio_data.is_empty() || api_key.is_empty() {
+        println!(
+            "[Dictato] Skipping transcription: audio_empty={}, api_key_empty={}",
+            audio_data.is_empty(),
+            api_key.is_empty()
+        );
         String::new()
     } else {
+        println!("[Dictato] Sending {} bytes to Groq API", audio_data.len());
         app.emit("processing-state", true).ok();
         let result = groq::transcribe(&api_key, audio_data, &language).await;
         match result {
@@ -120,6 +208,13 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     IS_RECORDING.store(false, Ordering::SeqCst);
     app.emit("recording-state", false).ok();
 
+    // Unregister cancel shortcut since recording stopped
+    unregister_cancel_shortcut(&app);
+
+    // Stop native audio capture
+    let audio_state = app.state::<AudioCaptureState>();
+    audio_state.handle.stop();
+
     // Clear buffer without transcribing
     let groq_state = app.state::<GroqState>();
     groq_state.clear_buffer();
@@ -127,18 +222,6 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     collapse_floating_window(&app)?;
     println!("[Dictato] Recording cancelled");
 
-    Ok(())
-}
-
-#[tauri::command]
-fn send_audio_chunk(app: AppHandle, audio: Vec<u8>) -> Result<(), String> {
-    if IS_RECORDING.load(Ordering::SeqCst) {
-        let groq_state = app.state::<GroqState>();
-        if let Err(e) = groq_state.append_audio(audio) {
-            app.emit("transcription-error", &e).ok();
-            return Err(e);
-        }
-    }
     Ok(())
 }
 
@@ -229,10 +312,6 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
         })
         .map_err(|e| e.to_string())?;
 
-    // Also register the cancel shortcut
-    let cancel_shortcut_str = get_cancel_shortcut_from_store(&app);
-    register_cancel_shortcut_internal(&app, &cancel_shortcut_str)?;
-
     Ok(())
 }
 
@@ -257,45 +336,26 @@ fn register_cancel_shortcut_internal(app: &AppHandle, shortcut_str: &str) -> Res
     Ok(())
 }
 
+fn unregister_cancel_shortcut(app: &AppHandle) {
+    let cancel_shortcut_str = get_cancel_shortcut_from_store(app);
+    if let Ok(shortcut) = cancel_shortcut_str.parse::<Shortcut>() {
+        app.global_shortcut().unregister(shortcut).ok();
+    }
+}
+
 #[tauri::command]
 async fn register_cancel_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), String> {
-    // Unregister all shortcuts first
-    app.global_shortcut().unregister_all().ok();
+    // Validate the shortcut format
+    let _: Shortcut = shortcut_str.parse().map_err(|e| format!("{:?}", e))?;
 
-    // Re-register the main recording shortcut
-    let main_shortcut_str = get_store_string(&app, store_keys::SHORTCUT)
-        .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
-
-    let main_shortcut: Shortcut = main_shortcut_str.parse().map_err(|e| format!("{:?}", e))?;
-
-    let app_clone = app.clone();
-    app.global_shortcut()
-        .on_shortcut(main_shortcut, move |_app, _shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-            let app = app_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                if IS_RECORDING.load(Ordering::SeqCst) {
-                    if let Err(e) = stop_recording(app).await {
-                        eprintln!("Failed to stop recording: {}", e);
-                    }
-                } else {
-                    let api_key = get_groq_api_key_from_store(&app);
-                    if api_key.is_some() {
-                        if let Err(e) = start_recording(app).await {
-                            eprintln!("Failed to start recording: {}", e);
-                        }
-                    } else {
-                        eprintln!("No Groq API key configured");
-                    }
-                }
-            });
-        })
-        .map_err(|e| e.to_string())?;
-
-    // Register the cancel shortcut
-    register_cancel_shortcut_internal(&app, &shortcut_str)?;
+    // If currently recording, re-register the cancel shortcut with the new value
+    if IS_RECORDING.load(Ordering::SeqCst) {
+        // Unregister old cancel shortcut
+        unregister_cancel_shortcut(&app);
+        // Register new one
+        register_cancel_shortcut_internal(&app, &shortcut_str)?;
+    }
+    // Otherwise, the new shortcut will be used next time recording starts
 
     Ok(())
 }
@@ -475,17 +535,18 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(GroqState::default())
+        .manage(AudioCaptureState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
             cancel_recording,
-            send_audio_chunk,
             copy_and_paste,
             register_shortcut,
             register_cancel_shortcut,
             unregister_shortcuts,
             get_recording_state,
             save_floating_position,
+            list_audio_devices,
         ])
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;
