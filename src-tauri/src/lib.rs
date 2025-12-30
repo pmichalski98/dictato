@@ -343,13 +343,12 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let RunEvent::WindowEvent {
+        .run(|app, event| match event {
+            RunEvent::WindowEvent {
                 label,
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
-            } = event
-            {
+            } => {
                 if label == "main" {
                     api.prevent_close();
                     if let Some(window) = app.get_webview_window("main") {
@@ -357,5 +356,13 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.show().ok();
+                    window.set_focus().ok();
+                }
+            }
+            _ => {}
         });
 }
