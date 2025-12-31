@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
-import { Card } from "./ui/card";
-import { Button } from "./ui/button";
-import { Label } from "./ui/label";
-import { RuleItem } from "./RuleItem";
-import { AddRuleDialog } from "./AddRuleDialog";
+import { ICON_SIZES } from "@/lib/constants";
+import { SectionLayout } from "../layout/SectionLayout";
+import { Card } from "../ui/card";
+import { Button } from "../ui/button";
+import { Label } from "../ui/label";
+import { RuleItem } from "../RuleItem";
+import { AddRuleDialog } from "../AddRuleDialog";
+import { ComingSoonBadge } from "../ui/ComingSoonBadge";
 import { TranscriptionRule } from "@/hooks/useSettings";
 
 interface RulesSectionProps {
@@ -49,7 +52,11 @@ export function RulesSection({
   const enabledCount = rules.filter((r) => r.enabled).length;
 
   return (
-    <>
+    <SectionLayout
+      title="Rules & Modes"
+      description="Transform your transcriptions with AI-powered rules"
+    >
+      {/* Rules */}
       <Card className="space-y-2.5">
         <div className="flex items-center justify-between">
           <div>
@@ -80,9 +87,23 @@ export function RulesSection({
           className="w-full"
           size="sm"
         >
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
+          <Plus size={ICON_SIZES.sm} className="mr-1.5" />
           Add Custom Rule
         </Button>
+      </Card>
+
+      {/* Modes - Future */}
+      <Card className="space-y-3 opacity-50">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <Label>Modes</Label>
+            <ComingSoonBadge />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Specialized transformation modes like Email, Technical Writing, and more.
+            Unlike rules, modes are selected per-transcription.
+          </p>
+        </div>
       </Card>
 
       <AddRuleDialog
@@ -92,6 +113,6 @@ export function RulesSection({
         editingRule={editingRule}
         onUpdate={handleUpdate}
       />
-    </>
+    </SectionLayout>
   );
 }
