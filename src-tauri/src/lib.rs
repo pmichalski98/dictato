@@ -36,6 +36,7 @@ mod store_keys {
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
     pub const AUTO_PASTE: &str = "autoPaste";
     pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
+    pub const ACTIVE_MODE: &str = "activeMode";
 }
 
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
@@ -59,6 +60,7 @@ fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 
 #[tauri::command]
 async fn start_recording(app: AppHandle) -> Result<(), String> {
+    println!("[Dictato] start_recording called");
     IS_RECORDING.store(true, Ordering::SeqCst);
 
     // Register cancel shortcut only while recording
@@ -67,6 +69,7 @@ async fn start_recording(app: AppHandle) -> Result<(), String> {
 
     app.emit("recording-state", true).ok();
     expand_floating_window(&app)?;
+    println!("[Dictato] start_recording completed");
 
     let groq_state = app.state::<GroqState>();
     groq_state.clear_buffer();
@@ -160,13 +163,27 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         }
     };
 
-    // Apply transcription rules if any are enabled (and not skipped for this recording)
+    // Apply mode transformation or rules (modes take priority over rules)
     let final_text = if !transcript.is_empty() {
         let skip_rules = should_skip_rules(&app);
         if skip_rules {
-            println!("[Dictato] Rules skipped for this recording");
+            println!("[Dictato] Transformation skipped for this recording");
             transcript
+        } else if let Some(mode_id) = get_active_mode_from_store(&app) {
+            // Mode is active - use mode transformation (rules are ignored)
+            app.emit("processing-message", "Applying mode...").ok();
+            match llm::process_with_mode(&api_key, &transcript, &mode_id).await {
+                Ok(processed) => {
+                    println!("[Dictato] Mode '{}' applied successfully", mode_id);
+                    processed
+                }
+                Err(e) => {
+                    eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
+                    transcript
+                }
+            }
         } else {
+            // No mode active - apply rules if any are enabled
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
@@ -391,6 +408,10 @@ fn should_skip_rules(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+fn get_active_mode_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, store_keys::ACTIVE_MODE).filter(|s| s != "none" && !s.is_empty())
+}
+
 #[tauri::command]
 fn get_recording_state() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
@@ -420,6 +441,7 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    #[allow(unused_mut)]
     let mut builder =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
             .title("Whisper")
@@ -460,9 +482,13 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
+    println!("[Dictato] expand_floating_window called");
     if let Some(window) = app.get_webview_window("floating") {
+        println!("[Dictato] Showing floating window");
         window.show().ok();
         app.emit("floating-expanded", true).ok();
+    } else {
+        println!("[Dictato] ERROR: Floating window not found!");
     }
     Ok(())
 }
@@ -546,6 +572,7 @@ pub fn run() {
             unregister_shortcuts,
             get_recording_state,
             list_audio_devices,
+            save_floating_position,
         ])
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;

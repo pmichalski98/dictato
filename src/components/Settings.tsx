@@ -17,6 +17,7 @@ export function Settings() {
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    updateActiveMode,
     toggleRule,
     addRule,
     updateRule,
@@ -71,10 +72,12 @@ export function Settings() {
       <div className={activeSection === "rules" ? "block" : "hidden"}>
         <RulesSection
           rules={settings.transcriptionRules}
+          activeMode={settings.activeMode}
           onToggle={toggleRule}
           onAdd={addRule}
           onUpdate={updateRule}
           onDelete={deleteRule}
+          onUpdateActiveMode={updateActiveMode}
         />
       </div>
 

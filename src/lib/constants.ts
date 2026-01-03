@@ -28,6 +28,7 @@ export const STORE_KEYS = {
   MICROPHONE_DEVICE_ID: "microphoneDeviceId",
   AUTO_PASTE: "autoPaste",
   TRANSCRIPTION_RULES: "transcriptionRules",
+  ACTIVE_MODE: "activeMode",
 } as const;
 
 /**
