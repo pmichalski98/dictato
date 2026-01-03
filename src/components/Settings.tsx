@@ -39,53 +39,6 @@ export function Settings() {
     );
   }
 
-  const renderSection = () => {
-    switch (activeSection) {
-      case "general":
-        return (
-          <GeneralSection
-            groqApiKey={settings.groqApiKey}
-            onSaveApiKey={updateGroqApiKey}
-          />
-        );
-      case "recording":
-        return (
-          <RecordingSection
-            language={settings.language}
-            microphoneDeviceId={settings.microphoneDeviceId}
-            autoPaste={settings.autoPaste}
-            shortcut={settings.shortcut}
-            cancelShortcut={settings.cancelShortcut}
-            onUpdateLanguage={updateLanguage}
-            onUpdateMicrophoneDeviceId={updateMicrophoneDeviceId}
-            onUpdateAutoPaste={updateAutoPaste}
-            onUpdateShortcut={updateShortcut}
-            onUpdateCancelShortcut={updateCancelShortcut}
-          />
-        );
-      case "rules":
-        return (
-          <RulesSection
-            rules={settings.transcriptionRules}
-            onToggle={toggleRule}
-            onAdd={addRule}
-            onUpdate={updateRule}
-            onDelete={deleteRule}
-          />
-        );
-      case "dictionary":
-        return <DictionarySection />;
-      case "history":
-        return <HistorySection />;
-      default: {
-        // Exhaustive check - TypeScript will error if a section is not handled
-        const _exhaustiveCheck: never = activeSection;
-        console.error(`Unknown section: ${_exhaustiveCheck}`);
-        return null;
-      }
-    }
-  };
-
   return (
     <AppLayout
       activeSection={activeSection}
@@ -93,7 +46,45 @@ export function Settings() {
       onNavigate={navigateTo}
       onToggleCollapsed={toggleCollapsed}
     >
-      {renderSection()}
+      <div className={activeSection === "general" ? "block" : "hidden"}>
+        <GeneralSection
+          groqApiKey={settings.groqApiKey}
+          onSaveApiKey={updateGroqApiKey}
+        />
+      </div>
+
+      <div className={activeSection === "recording" ? "block" : "hidden"}>
+        <RecordingSection
+          language={settings.language}
+          microphoneDeviceId={settings.microphoneDeviceId}
+          autoPaste={settings.autoPaste}
+          shortcut={settings.shortcut}
+          cancelShortcut={settings.cancelShortcut}
+          onUpdateLanguage={updateLanguage}
+          onUpdateMicrophoneDeviceId={updateMicrophoneDeviceId}
+          onUpdateAutoPaste={updateAutoPaste}
+          onUpdateShortcut={updateShortcut}
+          onUpdateCancelShortcut={updateCancelShortcut}
+        />
+      </div>
+
+      <div className={activeSection === "rules" ? "block" : "hidden"}>
+        <RulesSection
+          rules={settings.transcriptionRules}
+          onToggle={toggleRule}
+          onAdd={addRule}
+          onUpdate={updateRule}
+          onDelete={deleteRule}
+        />
+      </div>
+
+      <div className={activeSection === "dictionary" ? "block" : "hidden"}>
+        <DictionarySection />
+      </div>
+
+      <div className={activeSection === "history" ? "block" : "hidden"}>
+        <HistorySection />
+      </div>
     </AppLayout>
   );
 }
