@@ -78,8 +78,9 @@ body {
 }
 
 /* Transparent background for floating window */
-body.floating-window {
-  background-color: transparent;
+body.floating-window,
+body.floating-window #root {
+  background-color: transparent !important;
 }
 
 /* Custom dropdown arrow for selects */
@@ -106,4 +107,9 @@ select {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+  cursor: pointer;
 }

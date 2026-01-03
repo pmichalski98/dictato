@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 import { formatShortcut } from "@/lib/shortcuts";
 import { CheckIcon, GearIcon } from "@/components/ui/icons";
 import {
@@ -13,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TranscriptionRule } from "@/hooks/useSettings";
+import { invoke } from "@tauri-apps/api/core";
 
 const store = new LazyStore("settings.json");
 
