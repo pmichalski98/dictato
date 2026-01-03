@@ -5,28 +5,34 @@ import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
+import { Select } from "../ui/select";
 import { RuleItem } from "../RuleItem";
 import { AddRuleDialog } from "../AddRuleDialog";
-import { ComingSoonBadge } from "../ui/ComingSoonBadge";
-import { TranscriptionRule } from "@/hooks/useSettings";
+import { TranscriptionRule, DEFAULT_MODES } from "@/hooks/useSettings";
 
 interface RulesSectionProps {
   rules: TranscriptionRule[];
+  activeMode: string;
   onToggle: (id: string) => void;
   onAdd: (title: string, description: string) => void;
   onUpdate: (id: string, updates: Partial<TranscriptionRule>) => void;
   onDelete: (id: string) => void;
+  onUpdateActiveMode: (mode: string) => void;
 }
 
 export function RulesSection({
   rules,
+  activeMode,
   onToggle,
   onAdd,
   onUpdate,
   onDelete,
+  onUpdateActiveMode,
 }: RulesSectionProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<TranscriptionRule | null>(null);
+
+  const selectedMode = DEFAULT_MODES.find((m) => m.id === activeMode) ?? DEFAULT_MODES[0];
 
   const handleEdit = (id: string) => {
     const rule = rules.find((r) => r.id === id);
@@ -51,20 +57,45 @@ export function RulesSection({
 
   const enabledCount = rules.filter((r) => r.enabled).length;
 
+  const isRulesDisabled = activeMode !== "none";
+
   return (
     <SectionLayout
       title="Rules & Modes"
       description="Transform your transcriptions with AI-powered rules"
     >
-      {/* Rules */}
+      {/* Mode Selector */}
       <Card className="space-y-2.5">
+        <div>
+          <Label className="text-[13px]">Transformation Mode</Label>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {selectedMode.description}
+          </p>
+        </div>
+
+        <Select
+          value={activeMode}
+          onChange={(e) => onUpdateActiveMode(e.target.value)}
+        >
+          {DEFAULT_MODES.map((mode) => (
+            <option key={mode.id} value={mode.id}>
+              {mode.name}
+            </option>
+          ))}
+        </Select>
+      </Card>
+
+      {/* Rules */}
+      <Card className={`space-y-2.5 ${isRulesDisabled ? "opacity-50 pointer-events-none" : ""}`}>
         <div className="flex items-center justify-between">
           <div>
             <Label className="text-[13px]">Transcription Rules</Label>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {enabledCount > 0
-                ? `${enabledCount} rule${enabledCount > 1 ? "s" : ""} active`
-                : "Enable rules to polish your transcriptions"}
+              {isRulesDisabled
+                ? "Rules are disabled when a mode is active"
+                : enabledCount > 0
+                  ? `${enabledCount} rule${enabledCount > 1 ? "s" : ""} active`
+                  : "Enable rules to polish your transcriptions"}
             </p>
           </div>
         </div>
@@ -86,24 +117,11 @@ export function RulesSection({
           onClick={() => setIsDialogOpen(true)}
           className="w-full"
           size="sm"
+          disabled={isRulesDisabled}
         >
           <Plus size={ICON_SIZES.sm} className="mr-1.5" />
           Add Custom Rule
         </Button>
-      </Card>
-
-      {/* Modes - Future */}
-      <Card className="space-y-3 opacity-50">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <Label>Modes</Label>
-            <ComingSoonBadge />
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            Specialized transformation modes like Email, Technical Writing, and more.
-            Unlike rules, modes are selected per-transcription.
-          </p>
-        </div>
       </Card>
 
       <AddRuleDialog

@@ -9,6 +9,13 @@ export interface TranscriptionRule {
   isBuiltIn: boolean;
 }
 
+export interface TranscriptionMode {
+  id: string;
+  name: string;
+  description: string;
+  isBuiltIn: boolean;
+}
+
 interface Settings {
   groqApiKey: string;
   language: string;
@@ -17,6 +24,7 @@ interface Settings {
   microphoneDeviceId: string;
   autoPaste: boolean;
   transcriptionRules: TranscriptionRule[];
+  activeMode: string;
 }
 
 const DEFAULT_RULES: TranscriptionRule[] = [
@@ -57,6 +65,27 @@ const DEFAULT_RULES: TranscriptionRule[] = [
   },
 ];
 
+export const DEFAULT_MODES: TranscriptionMode[] = [
+  {
+    id: "none",
+    name: "None",
+    description: "No transformation applied, use individual rules instead",
+    isBuiltIn: true,
+  },
+  {
+    id: "vibe-coding",
+    name: "Vibe Coding",
+    description: "Super concise, LLM-friendly output for coding assistants",
+    isBuiltIn: true,
+  },
+  {
+    id: "professional-email",
+    name: "Professional Email",
+    description: "Formal email formatting with proper structure and tone",
+    isBuiltIn: true,
+  },
+];
+
 const DEFAULT_SETTINGS: Settings = {
   groqApiKey: "",
   language: "en",
@@ -65,6 +94,7 @@ const DEFAULT_SETTINGS: Settings = {
   microphoneDeviceId: "",
   autoPaste: true,
   transcriptionRules: DEFAULT_RULES,
+  activeMode: "none",
 };
 
 const store = new LazyStore("settings.json");
@@ -83,6 +113,7 @@ export function useSettings() {
         const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
         const autoPaste = await store.get<string>("autoPaste");
         const transcriptionRulesJson = await store.get<string>("transcriptionRules");
+        const activeMode = await store.get<string>("activeMode");
 
         let transcriptionRules = DEFAULT_RULES;
         if (transcriptionRulesJson) {
@@ -101,6 +132,7 @@ export function useSettings() {
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
           autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
           transcriptionRules,
+          activeMode: activeMode ?? DEFAULT_SETTINGS.activeMode,
         });
       } catch (err) {
         console.error("Failed to load settings:", err);
@@ -166,6 +198,15 @@ export function useSettings() {
     }
   }, []);
 
+  const updateActiveMode = useCallback(async (activeMode: string) => {
+    try {
+      await store.set("activeMode", activeMode);
+      setSettings((prev) => ({ ...prev, activeMode }));
+    } catch (err) {
+      console.error("Failed to save active mode:", err);
+    }
+  }, []);
+
   const updateTranscriptionRules = useCallback(async (rules: TranscriptionRule[]) => {
     try {
       await store.set("transcriptionRules", JSON.stringify(rules));
@@ -215,6 +256,7 @@ export function useSettings() {
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    updateActiveMode,
     updateTranscriptionRules,
     toggleRule,
     addRule,
