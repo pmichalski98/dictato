@@ -420,7 +420,6 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    #[allow(unused_mut)]
     let mut builder =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("/?window=floating".into()))
             .title("Whisper")
@@ -430,12 +429,13 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
             .skip_taskbar(true)
             .resizable(false)
             .focused(false)
-            .visible(false);
+            .visible(false)
+            .transparent(true);
 
-    // Enable transparency on macOS
-    #[cfg(target_os = "macos")]
+    // On Windows, disable shadow to fix transparency
+    #[cfg(target_os = "windows")]
     {
-        builder = builder.transparent(true);
+        builder = builder.shadow(false);
     }
 
     let window = builder.build().map_err(|e| e.to_string())?;
@@ -545,7 +545,6 @@ pub fn run() {
             register_cancel_shortcut,
             unregister_shortcuts,
             get_recording_state,
-            save_floating_position,
             list_audio_devices,
         ])
         .setup(|app| {
@@ -569,6 +568,20 @@ pub fn run() {
                     api.prevent_close();
                     if let Some(window) = app.get_webview_window("main") {
                         window.hide().ok();
+                    }
+                }
+            }
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::Moved(position),
+                ..
+            } => {
+                if label == "floating" {
+                    let x = position.x as f64;
+                    let y = position.y as f64;
+                    if let Ok(store) = app.store("settings.json") {
+                        store.set(store_keys::FLOATING_X, serde_json::json!(x));
+                        store.set(store_keys::FLOATING_Y, serde_json::json!(y));
                     }
                 }
             }
