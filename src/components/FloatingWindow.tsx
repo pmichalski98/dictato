@@ -9,9 +9,10 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TranscriptionRule } from "@/hooks/useSettings";
+import { TranscriptionRule, DEFAULT_MODES } from "@/hooks/useSettings";
 import { invoke } from "@tauri-apps/api/core";
 
 const store = new LazyStore("settings.json");
@@ -41,6 +42,7 @@ const STORE_KEYS = {
   TRANSCRIPTION_RULES: "transcriptionRules",
   CANCEL_SHORTCUT: "cancelShortcut",
   SHORTCUT: "shortcut",
+  ACTIVE_MODE: "activeMode",
 } as const;
 
 export function FloatingWindow() {
@@ -56,6 +58,7 @@ export function FloatingWindow() {
   );
   const [skipRules, setSkipRules] = useState(false);
   const [hasEnabledRules, setHasEnabledRules] = useState(false);
+  const [activeMode, setActiveMode] = useState("none");
 
   // Ref to store previous bar heights for smooth animation
   const prevBarHeightsRef = useRef<number[]>(
@@ -109,8 +112,12 @@ export function FloatingWindow() {
     setBarHeights(Array(BAR_COUNT).fill(MIN_BAR_HEIGHT));
   }, []);
 
-  const checkEnabledRules = useCallback(async () => {
+  const loadModeAndRules = useCallback(async () => {
     try {
+      const savedMode = await store.get<string>(STORE_KEYS.ACTIVE_MODE);
+      if (savedMode) {
+        setActiveMode(savedMode);
+      }
       const rulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
       if (rulesJson) {
         const parsedRules: TranscriptionRule[] = JSON.parse(rulesJson);
@@ -118,7 +125,7 @@ export function FloatingWindow() {
         setHasEnabledRules(hasEnabled);
       }
     } catch (err) {
-      console.error("Failed to load rules:", err);
+      console.error("Failed to load mode/rules:", err);
     }
   }, []);
 
@@ -131,10 +138,21 @@ export function FloatingWindow() {
     }
   }, []);
 
+  const updateActiveMode = useCallback(async (modeId: string) => {
+    setActiveMode(modeId);
+    try {
+      await store.set(STORE_KEYS.ACTIVE_MODE, modeId);
+    } catch (err) {
+      console.error("Failed to save active mode:", err);
+    }
+  }, []);
+
   useEffect(() => {
+    console.log("[FloatingWindow] Setting up event listeners");
     const unlistenExpanded = listen<boolean>(
       "floating-expanded",
       async (event) => {
+        console.log("[FloatingWindow] floating-expanded event:", event.payload);
         setIsActive(event.payload);
         if (event.payload) {
           setError(null);
@@ -153,7 +171,7 @@ export function FloatingWindow() {
           if (savedRecordingShortcut) {
             setRecordingShortcut(savedRecordingShortcut);
           }
-          checkEnabledRules();
+          loadModeAndRules();
           // Audio capture is now handled natively in Rust
         } else {
           resetBars();
@@ -193,7 +211,7 @@ export function FloatingWindow() {
       unlistenProcessing.then((fn) => fn());
       unlistenProcessingMessage.then((fn) => fn());
     };
-  }, [checkEnabledRules, updateBarsFromLevel, resetBars]);
+  }, [loadModeAndRules, updateBarsFromLevel, resetBars]);
 
   const handleDragStart = useCallback(async (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button")) {
@@ -211,6 +229,8 @@ export function FloatingWindow() {
     }
   }, []);
 
+  console.log("[FloatingWindow] Render - isActive:", isActive, "activeMode:", activeMode);
+
   if (!isActive) {
     return null;
   }
@@ -223,46 +243,71 @@ export function FloatingWindow() {
       >
         {/* Main status area */}
         <div className="flex items-center justify-center min-h-[36px] gap-3">
-          {/* Options dropdown - only show if there are enabled rules */}
-          {!isProcessing && !error && hasEnabledRules && (
+          {/* Options dropdown - show mode selector */}
+          {!isProcessing && !error && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   className={`
-                    flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200
+                    flex items-center justify-center px-2.5 h-8 rounded-lg transition-all duration-200 gap-1.5
                     ${
-                      skipRules
-                        ? "bg-orange-500/30 text-orange-300"
-                        : "bg-violet-500/30 text-violet-300"
+                      activeMode !== "none"
+                        ? "bg-violet-500/30 text-violet-300"
+                        : hasEnabledRules && !skipRules
+                          ? "bg-blue-500/30 text-blue-300"
+                          : "bg-zinc-600/30 text-zinc-400"
                     }
                   `}
-                  title="Rules options"
+                  title="Transformation mode"
                 >
                   <GearIcon />
+                  <span className="text-xs font-medium">
+                    {DEFAULT_MODES.find((m) => m.id === activeMode)?.name ?? "None"}
+                  </span>
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" side="bottom">
-                <DropdownMenuLabel>Rules</DropdownMenuLabel>
-                <DropdownMenuItem
-                  onClick={() => setRulesMode(false)}
-                  className={
-                    !skipRules ? "bg-violet-500/20 text-violet-300" : ""
-                  }
-                >
-                  {!skipRules && <CheckIcon />}
-                  <span className={!skipRules ? "" : "ml-5"}>
-                    Default rules
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setRulesMode(true)}
-                  className={
-                    skipRules ? "bg-orange-500/20 text-orange-300" : ""
-                  }
-                >
-                  {skipRules && <CheckIcon />}
-                  <span className={skipRules ? "" : "ml-5"}>None</span>
-                </DropdownMenuItem>
+                <DropdownMenuLabel>Mode</DropdownMenuLabel>
+                {DEFAULT_MODES.map((mode) => (
+                  <DropdownMenuItem
+                    key={mode.id}
+                    onClick={() => updateActiveMode(mode.id)}
+                    className={
+                      activeMode === mode.id ? "bg-violet-500/20 text-violet-300" : ""
+                    }
+                  >
+                    {activeMode === mode.id && <CheckIcon />}
+                    <span className={activeMode === mode.id ? "" : "ml-5"}>
+                      {mode.name}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+                {activeMode === "none" && hasEnabledRules && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Rules</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      onClick={() => setRulesMode(false)}
+                      className={
+                        !skipRules ? "bg-blue-500/20 text-blue-300" : ""
+                      }
+                    >
+                      {!skipRules && <CheckIcon />}
+                      <span className={!skipRules ? "" : "ml-5"}>
+                        Apply rules
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => setRulesMode(true)}
+                      className={
+                        skipRules ? "bg-orange-500/20 text-orange-300" : ""
+                      }
+                    >
+                      {skipRules && <CheckIcon />}
+                      <span className={skipRules ? "" : "ml-5"}>Skip rules</span>
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
