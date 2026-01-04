@@ -22,6 +22,9 @@ export function Settings() {
     addRule,
     updateRule,
     deleteRule,
+    addMode,
+    updateMode,
+    deleteMode,
   } = useSettings();
 
   const {
@@ -72,12 +75,16 @@ export function Settings() {
       <div className={activeSection === "rules" ? "block" : "hidden"}>
         <RulesSection
           rules={settings.transcriptionRules}
+          customModes={settings.customModes}
           activeMode={settings.activeMode}
           onToggle={toggleRule}
           onAdd={addRule}
           onUpdate={updateRule}
           onDelete={deleteRule}
           onUpdateActiveMode={updateActiveMode}
+          onAddMode={addMode}
+          onUpdateMode={updateMode}
+          onDeleteMode={deleteMode}
         />
       </div>
 

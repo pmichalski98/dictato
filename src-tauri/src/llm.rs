@@ -2,26 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
-
-// Mode system prompts
-pub const VIBE_CODING_PROMPT: &str = r#"You are a concise text transformer optimized for LLM input. Transform the user's spoken text to be:
-- Extremely brief and direct
-- No filler words, pleasantries, or unnecessary context
-- Use imperative commands when appropriate
-- Format as clear, actionable instructions
-- Optimize for copy-pasting into AI coding assistants
-
-Return ONLY the transformed text, no explanations."#;
-
-pub const PROFESSIONAL_EMAIL_PROMPT: &str = r#"You are a professional email formatter. Transform the user's spoken text into a well-structured professional email:
-- Use formal, professional language
-- Include appropriate greeting if not present
-- Organize into clear paragraphs
-- Use proper email conventions
-- Maintain a courteous but professional tone
-- Include appropriate closing if relevant
-
-Return ONLY the formatted email text, no explanations."#;
+const GROQ_API_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+const DEFAULT_MODEL: &str = "llama-3.1-8b-instant";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranscriptionRule {
@@ -62,40 +44,22 @@ struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
 
-pub async fn process_with_rules(
+/// Shared function to make Groq chat API calls
+async fn call_groq_chat(
     api_key: &str,
-    transcript: &str,
-    rules: Vec<TranscriptionRule>,
+    system_prompt: &str,
+    user_content: &str,
 ) -> Result<String, String> {
-    // Filter to only enabled rules
-    let enabled_rules: Vec<_> = rules.iter().filter(|r| r.enabled).collect();
-
-    if enabled_rules.is_empty() || transcript.trim().is_empty() {
-        return Ok(transcript.to_string());
-    }
-
-    // Build the system prompt with rules
-    let rules_text = enabled_rules
-        .iter()
-        .map(|r| format!("- {}: {}", r.title, r.description))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let system_prompt = format!(
-        "You are a text editor. Apply the following rules to the user's text and return ONLY the edited text, nothing else. Do not add any explanations, greetings, or commentary.\n\nRules to apply:\n{}\n\nIMPORTANT: Output only the processed text with no additional content.",
-        rules_text
-    );
-
     let request = ChatRequest {
-        model: "llama-3.1-8b-instant".to_string(),
+        model: DEFAULT_MODEL.to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: system_prompt,
+                content: system_prompt.to_string(),
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: transcript.to_string(),
+                content: user_content.to_string(),
             },
         ],
         temperature: 0.3, // Low for consistency
@@ -108,7 +72,7 @@ pub async fn process_with_rules(
         .map_err(|e| format!("Failed to create client: {}", e))?;
 
     let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
+        .post(GROQ_API_URL)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&request)
@@ -134,66 +98,43 @@ pub async fn process_with_rules(
         .ok_or_else(|| "No response from LLM".to_string())
 }
 
-/// Process transcript with a specific mode's system prompt
-pub async fn process_with_mode(
+/// Process transcript with transcription rules
+pub async fn process_with_rules(
     api_key: &str,
     transcript: &str,
-    mode_id: &str,
+    rules: Vec<TranscriptionRule>,
 ) -> Result<String, String> {
-    if transcript.trim().is_empty() {
+    // Filter to only enabled rules
+    let enabled_rules: Vec<_> = rules.iter().filter(|r| r.enabled).collect();
+
+    if enabled_rules.is_empty() || transcript.trim().is_empty() {
         return Ok(transcript.to_string());
     }
 
-    let system_prompt = match mode_id {
-        "vibe-coding" => VIBE_CODING_PROMPT,
-        "professional-email" => PROFESSIONAL_EMAIL_PROMPT,
-        _ => return Ok(transcript.to_string()), // Unknown mode, return unchanged
-    };
+    // Build the system prompt with rules
+    let rules_text = enabled_rules
+        .iter()
+        .map(|r| format!("- {}: {}", r.title, r.description))
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let request = ChatRequest {
-        model: "llama-3.1-8b-instant".to_string(),
-        messages: vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: transcript.to_string(),
-            },
-        ],
-        temperature: 0.3,
-        max_tokens: 4096,
-    };
+    let system_prompt = format!(
+        "You are a text editor. Apply the following rules to the user's text and return ONLY the edited text, nothing else. Do not add any explanations, greetings, or commentary.\n\nRules to apply:\n{}\n\nIMPORTANT: Output only the processed text with no additional content.",
+        rules_text
+    );
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(LLM_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("Failed to create client: {}", e))?;
+    call_groq_chat(api_key, &system_prompt, transcript).await
+}
 
-    let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| format!("LLM request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Groq Chat API error {}: {}", status, body));
+/// Process transcript with a custom system prompt
+pub async fn process_with_prompt(
+    api_key: &str,
+    transcript: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    if transcript.trim().is_empty() || prompt.trim().is_empty() {
+        return Ok(transcript.to_string());
     }
 
-    let result: ChatResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
-
-    result
-        .choices
-        .first()
-        .map(|c| c.message.content.trim().to_string())
-        .ok_or_else(|| "No response from LLM".to_string())
+    call_groq_chat(api_key, prompt, transcript).await
 }

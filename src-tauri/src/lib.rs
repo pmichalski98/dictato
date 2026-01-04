@@ -19,7 +19,7 @@ use tauri_plugin_store::StoreExt;
 
 // Floating window constants
 const FLOATING_WINDOW_WIDTH: f64 = 320.0;
-const FLOATING_WINDOW_HEIGHT: f64 = 160.0;
+const FLOATING_WINDOW_HEIGHT: f64 = 280.0;
 const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 
 // Audio processing constants
@@ -31,6 +31,7 @@ mod store_keys {
     pub const FLOATING_Y: &str = "floatingY";
     pub const SKIP_RULES_ONCE: &str = "skipRulesOnce";
     pub const TRANSCRIPTION_RULES: &str = "transcriptionRules";
+    pub const CUSTOM_MODES: &str = "customModes";
     pub const GROQ_API_KEY: &str = "groqApiKey";
     pub const LANGUAGE: &str = "language";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
@@ -38,6 +39,26 @@ mod store_keys {
     pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
     pub const ACTIVE_MODE: &str = "activeMode";
 }
+
+// Built-in mode prompts
+const VIBE_CODING_PROMPT: &str = r#"You are a concise text transformer optimized for LLM input. Transform the user's spoken text to be:
+- Extremely brief and direct
+- No filler words, pleasantries, or unnecessary context
+- Use imperative commands when appropriate
+- Format as clear, actionable instructions
+- Optimize for copy-pasting into AI coding assistants
+
+Return ONLY the transformed text, no explanations."#;
+
+const PROFESSIONAL_EMAIL_PROMPT: &str = r#"You are a professional email formatter. Transform the user's spoken text into a well-structured professional email:
+- Use formal, professional language
+- Include appropriate greeting if not present
+- Organize into clear paragraphs
+- Use proper email conventions
+- Maintain a courteous but professional tone
+- Include appropriate closing if relevant
+
+Return ONLY the formatted email text, no explanations."#;
 
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
@@ -168,17 +189,22 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
             println!("[Dictato] Transformation skipped for this recording");
             transcript
         } else if let Some(mode_id) = get_active_mode_from_store(&app) {
-            // Mode is active - use mode transformation (rules are ignored)
-            app.emit("processing-message", "Applying mode...").ok();
-            match llm::process_with_mode(&api_key, &transcript, &mode_id).await {
-                Ok(processed) => {
-                    println!("[Dictato] Mode '{}' applied successfully", mode_id);
-                    processed
+            // Mode is active - get prompt and apply transformation (rules are ignored)
+            if let Some(prompt) = get_mode_prompt_from_store(&app, &mode_id) {
+                app.emit("processing-message", "Applying mode...").ok();
+                match llm::process_with_prompt(&api_key, &transcript, &prompt).await {
+                    Ok(processed) => {
+                        println!("[Dictato] Mode '{}' applied successfully", mode_id);
+                        processed
+                    }
+                    Err(e) => {
+                        eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
+                        transcript
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
-                    transcript
-                }
+            } else {
+                println!("[Dictato] Mode '{}' not found, using raw transcript", mode_id);
+                transcript
             }
         } else {
             // No mode active - apply rules if any are enabled
@@ -409,6 +435,35 @@ fn should_skip_rules(app: &AppHandle) -> bool {
 
 fn get_active_mode_from_store(app: &AppHandle) -> Option<String> {
     get_store_string(app, store_keys::ACTIVE_MODE).filter(|s| s != "none" && !s.is_empty())
+}
+
+#[derive(serde::Deserialize)]
+struct CustomMode {
+    id: String,
+    prompt: String,
+}
+
+/// Get the prompt for the active mode (built-in or custom)
+fn get_mode_prompt_from_store(app: &AppHandle, mode_id: &str) -> Option<String> {
+    // Check built-in modes first
+    match mode_id {
+        "vibe-coding" => return Some(VIBE_CODING_PROMPT.to_string()),
+        "professional-email" => return Some(PROFESSIONAL_EMAIL_PROMPT.to_string()),
+        _ => {}
+    }
+
+    // Check custom modes
+    if let Some(custom_modes_json) = get_store_string(app, store_keys::CUSTOM_MODES) {
+        if let Ok(custom_modes) = serde_json::from_str::<Vec<CustomMode>>(&custom_modes_json) {
+            if let Some(mode) = custom_modes.iter().find(|m| m.id == mode_id) {
+                if !mode.prompt.is_empty() {
+                    return Some(mode.prompt.clone());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[tauri::command]
