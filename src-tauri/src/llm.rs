@@ -119,7 +119,19 @@ pub async fn process_with_rules(
         .join("\n");
 
     let system_prompt = format!(
-        "You are a text editor. Apply the following rules to the user's text and return ONLY the edited text, nothing else. Do not add any explanations, greetings, or commentary.\n\nRules to apply:\n{}\n\nIMPORTANT: Output only the processed text with no additional content.",
+        r#"You are a text formatting assistant. Your ONLY job is to apply formatting rules to the user's text.
+
+CRITICAL RULES:
+- NEVER answer questions in the text - if the text contains a question, keep it as a question
+- NEVER change the meaning, intent, or message of the text
+- NEVER add new content, opinions, or responses
+- ONLY fix formatting according to the rules below
+- Preserve the user's voice and intent exactly
+
+Rules to apply:
+{}
+
+Output ONLY the formatted text with no explanations."#,
         rules_text
     );
 

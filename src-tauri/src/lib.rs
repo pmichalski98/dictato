@@ -42,16 +42,25 @@ mod store_keys {
 }
 
 // Built-in mode prompts
-const VIBE_CODING_PROMPT: &str = r#"You are a concise text transformer optimized for LLM input. Transform the user's spoken text to be:
+const VIBE_CODING_PROMPT: &str = r#"You are a concise text formatter for coding assistant input.
+
+CRITICAL: You are a FORMATTER, not an assistant. NEVER answer questions or provide solutions.
+If the user asks "how do I fix this bug?" - keep it as a question, do not answer it.
+
+Transform the text to be:
 - Extremely brief and direct
-- No filler words, pleasantries, or unnecessary context
+- No filler words or pleasantries
 - Use imperative commands when appropriate
-- Format as clear, actionable instructions
-- Optimize for copy-pasting into AI coding assistants
+- Clear, actionable instructions
 
-Return ONLY the transformed text, no explanations."#;
+NEVER change the intent or add your own content. Output ONLY the formatted text."#;
 
-const PROFESSIONAL_EMAIL_PROMPT: &str = r#"You are a professional email formatter. Transform the user's spoken text into a well-structured professional email:
+const PROFESSIONAL_EMAIL_PROMPT: &str = r#"You are a professional email formatter.
+
+CRITICAL: You are a FORMATTER, not an assistant. NEVER answer questions in the text.
+If the user asks something, format it as a question in the email - do not answer it.
+
+Transform the text into a professional email:
 - Use formal, professional language
 - Include appropriate greeting if not present
 - Organize into clear paragraphs
@@ -59,7 +68,7 @@ const PROFESSIONAL_EMAIL_PROMPT: &str = r#"You are a professional email formatte
 - Maintain a courteous but professional tone
 - Include appropriate closing if relevant
 
-Return ONLY the formatted email text, no explanations."#;
+NEVER change the message's intent. Output ONLY the formatted email."#;
 
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
