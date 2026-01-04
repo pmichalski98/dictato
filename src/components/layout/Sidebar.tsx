@@ -1,4 +1,6 @@
+import { useState, useEffect } from "react";
 import { Settings2, Mic, Sparkles, BookText, Clock, PanelLeftClose, PanelLeft } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
 import { cn } from "@/lib/utils";
 import { ICON_SIZES, SIDEBAR } from "@/lib/constants";
 import { NavigationItem, Section } from "@/types/navigation";
@@ -25,6 +27,12 @@ export function Sidebar({
   onNavigate,
   onToggleCollapsed,
 }: SidebarProps) {
+  const [version, setVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion().then(setVersion);
+  }, []);
+
   return (
     <aside
       className={cn(
@@ -68,8 +76,8 @@ export function Sidebar({
         ))}
       </nav>
 
-      {/* Collapse Toggle */}
-      <div className="p-2 border-t border-border">
+      {/* Footer */}
+      <div className="p-2 border-t border-border space-y-1">
         <button
           onClick={onToggleCollapsed}
           className={cn(
@@ -87,6 +95,11 @@ export function Sidebar({
             </>
           )}
         </button>
+        {version && !isCollapsed && (
+          <div className="px-3 py-1 text-[11px] text-muted-foreground/60">
+            v{version}
+          </div>
+        )}
       </div>
     </aside>
   );
