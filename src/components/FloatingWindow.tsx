@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import { ListChecks } from "lucide-react";
 import { formatShortcut } from "@/lib/shortcuts";
-import { CheckIcon, GearIcon } from "@/components/ui/icons";
+import { STORE_KEYS } from "@/lib/storeKeys";
+import { CheckIcon } from "@/components/ui/icons";
+import { ModeIcon } from "@/components/IconPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TranscriptionRule, DEFAULT_MODES } from "@/hooks/useSettings";
+import { TranscriptionRule, TranscriptionMode, DEFAULT_MODES } from "@/hooks/useSettings";
 
 const store = new LazyStore("settings.json");
 
@@ -34,15 +37,6 @@ const LEVEL_PHASE_FACTOR = 2; // How much audio level affects wave phase
 const RANDOM_BASE = 0.92; // Minimum random factor
 const RANDOM_RANGE = 0.16; // Random variation range
 
-// Store keys (should match backend)
-const STORE_KEYS = {
-  SKIP_RULES_ONCE: "skipRulesOnce",
-  TRANSCRIPTION_RULES: "transcriptionRules",
-  CANCEL_SHORTCUT: "cancelShortcut",
-  SHORTCUT: "shortcut",
-  ACTIVE_MODE: "activeMode",
-} as const;
-
 export function FloatingWindow() {
   const [isActive, setIsActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -57,11 +51,14 @@ export function FloatingWindow() {
   const [skipRules, setSkipRules] = useState(false);
   const [hasEnabledRules, setHasEnabledRules] = useState(false);
   const [activeMode, setActiveMode] = useState("none");
+  const [customModes, setCustomModes] = useState<TranscriptionMode[]>([]);
 
   // Ref to store previous bar heights for smooth animation
   const prevBarHeightsRef = useRef<number[]>(
     Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
   );
+
+  const allModes = [...DEFAULT_MODES, ...customModes];
 
   // Update bars based on audio level from native capture
   const updateBarsFromLevel = useCallback((level: number) => {
@@ -122,26 +119,40 @@ export function FloatingWindow() {
         const hasEnabled = parsedRules.some((r) => r.enabled);
         setHasEnabledRules(hasEnabled);
       }
+      const customModesJson = await store.get<string>(STORE_KEYS.CUSTOM_MODES);
+      if (customModesJson) {
+        const parsedModes: TranscriptionMode[] = JSON.parse(customModesJson);
+        setCustomModes(parsedModes);
+      }
     } catch (err) {
       console.error("Failed to load mode/rules:", err);
     }
   }, []);
 
-  const setRulesMode = useCallback(async (skip: boolean) => {
-    setSkipRules(skip);
+  const updateActiveMode = useCallback(async (modeId: string) => {
+    setActiveMode(modeId);
+    // When selecting "None", skip rules (no transformation)
+    if (modeId === "none") {
+      setSkipRules(true);
+    }
     try {
-      await store.set(STORE_KEYS.SKIP_RULES_ONCE, skip ? "true" : "false");
+      await store.set(STORE_KEYS.ACTIVE_MODE, modeId);
+      if (modeId === "none") {
+        await store.set(STORE_KEYS.SKIP_RULES_ONCE, "true");
+      }
     } catch (err) {
-      console.error("Failed to save skip rules:", err);
+      console.error("Failed to save active mode:", err);
     }
   }, []);
 
-  const updateActiveMode = useCallback(async (modeId: string) => {
-    setActiveMode(modeId);
+  const selectDefaultRules = useCallback(async () => {
+    setActiveMode("none");
+    setSkipRules(false);
     try {
-      await store.set(STORE_KEYS.ACTIVE_MODE, modeId);
+      await store.set(STORE_KEYS.ACTIVE_MODE, "none");
+      await store.set(STORE_KEYS.SKIP_RULES_ONCE, "false");
     } catch (err) {
-      console.error("Failed to save active mode:", err);
+      console.error("Failed to set default rules mode:", err);
     }
   }, []);
 
@@ -209,128 +220,136 @@ export function FloatingWindow() {
     };
   }, [loadModeAndRules, updateBarsFromLevel, resetBars]);
 
+  const currentMode = allModes.find((m) => m.id === activeMode);
+
   if (!isActive) {
     return null;
   }
 
   return (
-    <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden">
-      <div
-        data-tauri-drag-region
-        className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in cursor-move"
-      >
-        {/* Main status area */}
-        <div className="flex items-center justify-center min-h-[36px] gap-3">
-          {/* Options dropdown - show mode selector */}
-          {!isProcessing && !error && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className={`
-                    flex items-center justify-center px-2.5 h-8 rounded-lg transition-all duration-200 gap-1.5
-                    ${
-                      activeMode !== "none"
-                        ? "bg-violet-500/30 text-violet-300"
-                        : hasEnabledRules && !skipRules
-                          ? "bg-blue-500/30 text-blue-300"
-                          : "bg-zinc-600/30 text-zinc-400"
-                    }
-                  `}
-                  title="Transformation mode"
-                >
-                  <GearIcon />
-                  <span className="text-xs font-medium">
-                    {DEFAULT_MODES.find((m) => m.id === activeMode)?.name ?? "None"}
-                  </span>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="bottom">
-                <DropdownMenuLabel>Mode</DropdownMenuLabel>
-                {DEFAULT_MODES.map((mode) => (
-                  <DropdownMenuItem
-                    key={mode.id}
-                    onClick={() => updateActiveMode(mode.id)}
-                    className={
-                      activeMode === mode.id ? "bg-violet-500/20 text-violet-300" : ""
-                    }
+    <>
+      <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden">
+        <div
+          data-tauri-drag-region
+          className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in cursor-move"
+        >
+          {/* Main status area */}
+          <div className="flex items-center justify-center min-h-[36px] gap-3">
+            {/* Options dropdown - show mode selector */}
+            {!isProcessing && !error && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={`
+                      flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200
+                      ${
+                        activeMode !== "none"
+                          ? "bg-violet-500/30 text-violet-300"
+                          : hasEnabledRules && !skipRules
+                            ? "bg-blue-500/30 text-blue-300"
+                            : "bg-zinc-600/30 text-zinc-400"
+                      }
+                    `}
+                    title={activeMode === "none" && hasEnabledRules && !skipRules ? "Default Rules" : currentMode?.name ?? "None"}
                   >
-                    {activeMode === mode.id && <CheckIcon />}
-                    <span className={activeMode === mode.id ? "" : "ml-5"}>
-                      {mode.name}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                {activeMode === "none" && hasEnabledRules && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>Rules</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      onClick={() => setRulesMode(false)}
-                      className={
-                        !skipRules ? "bg-blue-500/20 text-blue-300" : ""
-                      }
-                    >
-                      {!skipRules && <CheckIcon />}
-                      <span className={!skipRules ? "" : "ml-5"}>
-                        Apply rules
-                      </span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => setRulesMode(true)}
-                      className={
-                        skipRules ? "bg-orange-500/20 text-orange-300" : ""
-                      }
-                    >
-                      {skipRules && <CheckIcon />}
-                      <span className={skipRules ? "" : "ml-5"}>Skip rules</span>
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                    {activeMode === "none" && hasEnabledRules && !skipRules ? (
+                      <ListChecks size={16} />
+                    ) : currentMode?.icon ? (
+                      <ModeIcon icon={currentMode.icon} size={16} />
+                    ) : (
+                      <ModeIcon icon="Circle" size={16} />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="bottom">
+                  <DropdownMenuLabel>Mode</DropdownMenuLabel>
+                  {allModes.map((mode) => {
+                    const isSelected = mode.id === "none"
+                      ? activeMode === "none" && skipRules
+                      : activeMode === mode.id;
+                    return (
+                      <DropdownMenuItem
+                        key={mode.id}
+                        onClick={() => updateActiveMode(mode.id)}
+                        className={isSelected ? "bg-violet-500/20 text-violet-300" : ""}
+                      >
+                        <span className="flex items-center gap-2 flex-1">
+                          {mode.icon ? (
+                            <ModeIcon icon={mode.icon} size={14} />
+                          ) : (
+                            <span className="w-[14px]" />
+                          )}
+                          <span>{mode.name}</span>
+                        </span>
+                        {isSelected && <CheckIcon />}
+                      </DropdownMenuItem>
+                    );
+                  })}
 
-          {isProcessing ? (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
-              <span className="text-sm text-white/70 font-medium">
-                {processingMessage}
+                  {/* Default Rules option - applies enabled rules without mode */}
+                  {hasEnabledRules && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={selectDefaultRules}
+                        className={
+                          activeMode === "none" && !skipRules ? "bg-blue-500/20 text-blue-300" : ""
+                        }
+                      >
+                        <span className="flex items-center gap-2 flex-1">
+                          <ListChecks size={14} />
+                          <span>Default Rules</span>
+                        </span>
+                        {activeMode === "none" && !skipRules && <CheckIcon />}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            {isProcessing ? (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
+                <span className="text-sm text-white/70 font-medium">
+                  {processingMessage}
+                </span>
+              </div>
+            ) : error ? (
+              <span className="text-sm text-red-400 font-medium">{error}</span>
+            ) : (
+              <div className="flex items-center gap-[2px] h-12">
+                {barHeights.map((height, i) => (
+                  <div
+                    key={i}
+                    className="w-[2px] bg-linear-to-t from-violet-500 to-pink-400 rounded-full"
+                    style={{ height: `${height}px` }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Hints row */}
+          {!isProcessing && !error && (
+            <div className="flex items-center gap-4 text-[11px] text-white/40">
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
+                  {formatShortcut(cancelShortcut)}
+                </kbd>
+                <span>cancel</span>
               </span>
-            </div>
-          ) : error ? (
-            <span className="text-sm text-red-400 font-medium">{error}</span>
-          ) : (
-            <div className="flex items-center gap-[2px] h-12">
-              {barHeights.map((height, i) => (
-                <div
-                  key={i}
-                  className="w-[2px] bg-linear-to-t from-violet-500 to-pink-400 rounded-full"
-                  style={{ height: `${height}px` }}
-                />
-              ))}
+              <span className="text-white/20">|</span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
+                  {formatShortcut(recordingShortcut)}
+                </kbd>
+                <span>finish</span>
+              </span>
             </div>
           )}
         </div>
-
-        {/* Hints row */}
-        {!isProcessing && !error && (
-          <div className="flex items-center gap-4 text-[11px] text-white/40">
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
-                {formatShortcut(cancelShortcut)}
-              </kbd>
-              <span>cancel</span>
-            </span>
-            <span className="text-white/20">|</span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
-                {formatShortcut(recordingShortcut)}
-              </kbd>
-              <span>finish</span>
-            </span>
-          </div>
-        )}
       </div>
-    </div>
+    </>
   );
 }

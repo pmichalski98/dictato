@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import { STORE_KEYS } from "@/lib/storeKeys";
+import type { IconName } from "@/components/IconPicker";
 
 export interface TranscriptionRule {
   id: string;
@@ -13,6 +15,9 @@ export interface TranscriptionMode {
   id: string;
   name: string;
   description: string;
+  /** Prompt is only required for custom modes; built-in modes have prompts in Rust backend */
+  prompt?: string;
+  icon?: IconName;
   isBuiltIn: boolean;
 }
 
@@ -24,6 +29,7 @@ interface Settings {
   microphoneDeviceId: string;
   autoPaste: boolean;
   transcriptionRules: TranscriptionRule[];
+  customModes: TranscriptionMode[];
   activeMode: string;
 }
 
@@ -65,23 +71,27 @@ const DEFAULT_RULES: TranscriptionRule[] = [
   },
 ];
 
+// Built-in modes - prompts are stored in Rust backend (lib.rs)
 export const DEFAULT_MODES: TranscriptionMode[] = [
   {
     id: "none",
     name: "None",
     description: "No transformation applied, use individual rules instead",
+    icon: "Circle",
     isBuiltIn: true,
   },
   {
     id: "vibe-coding",
     name: "Vibe Coding",
     description: "Super concise, LLM-friendly output for coding assistants",
+    icon: "Code",
     isBuiltIn: true,
   },
   {
     id: "professional-email",
     name: "Professional Email",
     description: "Formal email formatting with proper structure and tone",
+    icon: "Mail",
     isBuiltIn: true,
   },
 ];
@@ -94,6 +104,7 @@ const DEFAULT_SETTINGS: Settings = {
   microphoneDeviceId: "",
   autoPaste: true,
   transcriptionRules: DEFAULT_RULES,
+  customModes: [],
   activeMode: "none",
 };
 
@@ -106,14 +117,15 @@ export function useSettings() {
   useEffect(() => {
     async function loadSettings() {
       try {
-        const groqApiKey = await store.get<string>("groqApiKey");
-        const language = await store.get<string>("language");
-        const shortcut = await store.get<string>("shortcut");
-        const cancelShortcut = await store.get<string>("cancelShortcut");
-        const microphoneDeviceId = await store.get<string>("microphoneDeviceId");
-        const autoPaste = await store.get<string>("autoPaste");
-        const transcriptionRulesJson = await store.get<string>("transcriptionRules");
-        const activeMode = await store.get<string>("activeMode");
+        const groqApiKey = await store.get<string>(STORE_KEYS.GROQ_API_KEY);
+        const language = await store.get<string>(STORE_KEYS.LANGUAGE);
+        const shortcut = await store.get<string>(STORE_KEYS.SHORTCUT);
+        const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
+        const microphoneDeviceId = await store.get<string>(STORE_KEYS.MICROPHONE_DEVICE_ID);
+        const autoPaste = await store.get<string>(STORE_KEYS.AUTO_PASTE);
+        const transcriptionRulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
+        const customModesJson = await store.get<string>(STORE_KEYS.CUSTOM_MODES);
+        const activeMode = await store.get<string>(STORE_KEYS.ACTIVE_MODE);
 
         let transcriptionRules = DEFAULT_RULES;
         if (transcriptionRulesJson) {
@@ -121,6 +133,15 @@ export function useSettings() {
             transcriptionRules = JSON.parse(transcriptionRulesJson);
           } catch {
             console.error("Failed to parse transcription rules");
+          }
+        }
+
+        let customModes: TranscriptionMode[] = [];
+        if (customModesJson) {
+          try {
+            customModes = JSON.parse(customModesJson);
+          } catch {
+            console.error("Failed to parse custom modes");
           }
         }
 
@@ -132,6 +153,7 @@ export function useSettings() {
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
           autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
           transcriptionRules,
+          customModes,
           activeMode: activeMode ?? DEFAULT_SETTINGS.activeMode,
         });
       } catch (err) {
@@ -146,7 +168,7 @@ export function useSettings() {
 
   const updateShortcut = useCallback(async (shortcut: string) => {
     try {
-      await store.set("shortcut", shortcut);
+      await store.set(STORE_KEYS.SHORTCUT, shortcut);
       setSettings((prev) => ({ ...prev, shortcut }));
     } catch (err) {
       console.error("Failed to save shortcut:", err);
@@ -155,7 +177,7 @@ export function useSettings() {
 
   const updateCancelShortcut = useCallback(async (cancelShortcut: string) => {
     try {
-      await store.set("cancelShortcut", cancelShortcut);
+      await store.set(STORE_KEYS.CANCEL_SHORTCUT, cancelShortcut);
       setSettings((prev) => ({ ...prev, cancelShortcut }));
     } catch (err) {
       console.error("Failed to save cancel shortcut:", err);
@@ -164,7 +186,7 @@ export function useSettings() {
 
   const updateGroqApiKey = useCallback(async (groqApiKey: string) => {
     try {
-      await store.set("groqApiKey", groqApiKey);
+      await store.set(STORE_KEYS.GROQ_API_KEY, groqApiKey);
       setSettings((prev) => ({ ...prev, groqApiKey }));
     } catch (err) {
       console.error("Failed to save Groq API key:", err);
@@ -173,7 +195,7 @@ export function useSettings() {
 
   const updateLanguage = useCallback(async (language: string) => {
     try {
-      await store.set("language", language);
+      await store.set(STORE_KEYS.LANGUAGE, language);
       setSettings((prev) => ({ ...prev, language }));
     } catch (err) {
       console.error("Failed to save language:", err);
@@ -182,7 +204,7 @@ export function useSettings() {
 
   const updateMicrophoneDeviceId = useCallback(async (microphoneDeviceId: string) => {
     try {
-      await store.set("microphoneDeviceId", microphoneDeviceId);
+      await store.set(STORE_KEYS.MICROPHONE_DEVICE_ID, microphoneDeviceId);
       setSettings((prev) => ({ ...prev, microphoneDeviceId }));
     } catch (err) {
       console.error("Failed to save microphone device:", err);
@@ -191,7 +213,7 @@ export function useSettings() {
 
   const updateAutoPaste = useCallback(async (autoPaste: boolean) => {
     try {
-      await store.set("autoPaste", autoPaste ? "true" : "false");
+      await store.set(STORE_KEYS.AUTO_PASTE, autoPaste ? "true" : "false");
       setSettings((prev) => ({ ...prev, autoPaste }));
     } catch (err) {
       console.error("Failed to save auto-paste setting:", err);
@@ -200,7 +222,7 @@ export function useSettings() {
 
   const updateActiveMode = useCallback(async (activeMode: string) => {
     try {
-      await store.set("activeMode", activeMode);
+      await store.set(STORE_KEYS.ACTIVE_MODE, activeMode);
       setSettings((prev) => ({ ...prev, activeMode }));
     } catch (err) {
       console.error("Failed to save active mode:", err);
@@ -209,7 +231,7 @@ export function useSettings() {
 
   const updateTranscriptionRules = useCallback(async (rules: TranscriptionRule[]) => {
     try {
-      await store.set("transcriptionRules", JSON.stringify(rules));
+      await store.set(STORE_KEYS.TRANSCRIPTION_RULES, JSON.stringify(rules));
       setSettings((prev) => ({ ...prev, transcriptionRules: rules }));
     } catch (err) {
       console.error("Failed to save transcription rules:", err);
@@ -247,6 +269,45 @@ export function useSettings() {
     await updateTranscriptionRules(newRules);
   }, [settings.transcriptionRules, updateTranscriptionRules]);
 
+  // Mode CRUD operations
+  const updateCustomModes = useCallback(async (modes: TranscriptionMode[]) => {
+    try {
+      await store.set(STORE_KEYS.CUSTOM_MODES, JSON.stringify(modes));
+      setSettings((prev) => ({ ...prev, customModes: modes }));
+    } catch (err) {
+      console.error("Failed to save custom modes:", err);
+    }
+  }, []);
+
+  const addMode = useCallback(async (name: string, description: string, prompt: string, icon?: IconName) => {
+    const newMode: TranscriptionMode = {
+      id: `custom-mode-${Date.now()}`,
+      name,
+      description,
+      prompt,
+      icon,
+      isBuiltIn: false,
+    };
+    const newModes = [...settings.customModes, newMode];
+    await updateCustomModes(newModes);
+  }, [settings.customModes, updateCustomModes]);
+
+  const updateMode = useCallback(async (modeId: string, updates: Partial<TranscriptionMode>) => {
+    const newModes = settings.customModes.map((mode) =>
+      mode.id === modeId ? { ...mode, ...updates } : mode
+    );
+    await updateCustomModes(newModes);
+  }, [settings.customModes, updateCustomModes]);
+
+  const deleteMode = useCallback(async (modeId: string) => {
+    const newModes = settings.customModes.filter((mode) => mode.id !== modeId);
+    await updateCustomModes(newModes);
+    // If the deleted mode was active, reset to "none"
+    if (settings.activeMode === modeId) {
+      await updateActiveMode("none");
+    }
+  }, [settings.customModes, settings.activeMode, updateCustomModes, updateActiveMode]);
+
   return {
     settings,
     isLoading,
@@ -262,6 +323,9 @@ export function useSettings() {
     addRule,
     updateRule,
     deleteRule,
+    addMode,
+    updateMode,
+    deleteMode,
   };
 }
 
