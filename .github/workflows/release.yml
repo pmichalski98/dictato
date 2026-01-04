@@ -43,6 +43,17 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      - name: Debug signing key
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "✅ TAURI_SIGNING_PRIVATE_KEY is set (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
+          else
+            echo "❌ TAURI_SIGNING_PRIVATE_KEY is NOT set"
+          fi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.5
         env:
