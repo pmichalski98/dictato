@@ -3,6 +3,7 @@ mod groq;
 mod llm;
 
 use audio::{AudioCaptureHandle, AudioDevice};
+#[cfg(not(target_os = "macos"))]
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -266,6 +267,61 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Check if accessibility permissions are granted on macOS using the proper API
+#[cfg(target_os = "macos")]
+fn check_accessibility_permissions() -> bool {
+    // Use AXIsProcessTrusted from ApplicationServices framework
+    // This is the proper way to check accessibility permissions
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    // SAFETY: AXIsProcessTrusted is a safe system call that just returns a boolean
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_accessibility_permissions() -> bool {
+    true
+}
+
+/// Perform the actual paste operation
+/// On macOS, uses AppleScript which is more reliable than enigo for keyboard simulation
+/// because it runs in a separate process and doesn't have threading issues
+#[cfg(target_os = "macos")]
+fn perform_paste() -> Result<(), String> {
+    use std::process::Command;
+
+    // Use AppleScript to simulate Cmd+V - this is more reliable than enigo
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            r#"tell application "System Events" to keystroke "v" using command down"#,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("AppleScript paste failed: {}", stderr))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn perform_paste() -> Result<(), String> {
+    let settings = Settings::default();
+    let mut enigo = Enigo::new(&settings).map_err(|e| format!("Failed to create Enigo: {:?}", e))?;
+
+    enigo.key(Key::Control, enigo::Direction::Press).ok();
+    enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
+    enigo.key(Key::Control, enigo::Direction::Release).ok();
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     // Always copy to clipboard first
@@ -285,28 +341,32 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
         return Ok(());
     }
 
+    // Check accessibility permissions first on macOS
+    #[cfg(target_os = "macos")]
+    {
+        if !check_accessibility_permissions() {
+            println!("[Dictato] Accessibility permissions not granted. Text copied to clipboard - press Cmd+V to paste.");
+            println!("[Dictato] Grant permissions in System Settings → Privacy & Security → Accessibility");
+            return Ok(());
+        }
+    }
+
+    // Small delay to let the system settle
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Try to auto-paste
-    match Enigo::new(&Settings::default()) {
-        Ok(mut enigo) => {
-            #[cfg(target_os = "macos")]
-            {
-                enigo.key(Key::Meta, enigo::Direction::Press).ok();
-                enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
-                enigo.key(Key::Meta, enigo::Direction::Release).ok();
-            }
+    // Run enigo operations in a blocking task to avoid tokio runtime issues
+    // This ensures enigo runs on a dedicated thread, not the tokio worker pool
+    let paste_result = tokio::task::spawn_blocking(perform_paste).await;
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                enigo.key(Key::Control, enigo::Direction::Press).ok();
-                enigo.key(Key::Unicode('v'), enigo::Direction::Click).ok();
-                enigo.key(Key::Control, enigo::Direction::Release).ok();
-            }
+    match paste_result {
+        Ok(Ok(())) => {
             println!("[Dictato] Auto-pasted");
         }
+        Ok(Err(e)) => {
+            println!("[Dictato] Auto-paste failed: {}. Text is in clipboard - press Cmd+V to paste.", e);
+        }
         Err(e) => {
-            println!("[Dictato] Auto-paste failed: {:?}. Grant Accessibility permissions in System Settings → Privacy & Security → Accessibility", e);
+            println!("[Dictato] Auto-paste task failed: {:?}. Text is in clipboard - press Cmd+V to paste.", e);
         }
     }
 
