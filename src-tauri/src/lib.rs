@@ -60,7 +60,6 @@ fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 
 #[tauri::command]
 async fn start_recording(app: AppHandle) -> Result<(), String> {
-    println!("[Dictato] start_recording called");
     IS_RECORDING.store(true, Ordering::SeqCst);
 
     // Register cancel shortcut only while recording
@@ -69,7 +68,6 @@ async fn start_recording(app: AppHandle) -> Result<(), String> {
 
     app.emit("recording-state", true).ok();
     expand_floating_window(&app)?;
-    println!("[Dictato] start_recording completed");
 
     let groq_state = app.state::<GroqState>();
     groq_state.clear_buffer();
@@ -322,7 +320,8 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                             eprintln!("Failed to start recording: {}", e);
                         }
                     } else {
-                        eprintln!("No Groq API key configured");
+                        // Show error to user when no API key configured
+                        show_error(&app, "No API key configured. Add your Groq API key in Settings.");
                     }
                 }
             });
@@ -482,15 +481,29 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
-    println!("[Dictato] expand_floating_window called");
     if let Some(window) = app.get_webview_window("floating") {
-        println!("[Dictato] Showing floating window");
         window.show().ok();
         app.emit("floating-expanded", true).ok();
-    } else {
-        println!("[Dictato] ERROR: Floating window not found!");
     }
     Ok(())
+}
+
+fn show_error(app: &AppHandle, message: &str) {
+    if let Some(window) = app.get_webview_window("floating") {
+        window.show().ok();
+        app.emit("floating-expanded", true).ok();
+        app.emit("transcription-error", message).ok();
+
+        // Auto-hide after 3 seconds
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            if let Some(window) = app_clone.get_webview_window("floating") {
+                window.hide().ok();
+                app_clone.emit("floating-expanded", false).ok();
+            }
+        });
+    }
 }
 
 fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
@@ -600,15 +613,21 @@ pub fn run() {
             }
             RunEvent::WindowEvent {
                 label,
-                event: WindowEvent::Moved(position),
+                event: WindowEvent::Moved(_),
                 ..
             } => {
                 if label == "floating" {
-                    let x = position.x as f64;
-                    let y = position.y as f64;
-                    if let Ok(store) = app.store("settings.json") {
-                        store.set(store_keys::FLOATING_X, serde_json::json!(x));
-                        store.set(store_keys::FLOATING_Y, serde_json::json!(y));
+                    // Save logical position for consistent storage
+                    if let Some(window) = app.get_webview_window("floating") {
+                        if let Ok(pos) = window.outer_position() {
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let x = pos.x as f64 / scale;
+                            let y = pos.y as f64 / scale;
+                            if let Ok(store) = app.store("settings.json") {
+                                store.set(store_keys::FLOATING_X, serde_json::json!(x));
+                                store.set(store_keys::FLOATING_Y, serde_json::json!(y));
+                            }
+                        }
                     }
                 }
             }

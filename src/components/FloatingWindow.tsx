@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { formatShortcut } from "@/lib/shortcuts";
 import { CheckIcon, GearIcon } from "@/components/ui/icons";
 import {
@@ -13,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TranscriptionRule, DEFAULT_MODES } from "@/hooks/useSettings";
-import { invoke } from "@tauri-apps/api/core";
 
 const store = new LazyStore("settings.json");
 
@@ -148,11 +146,9 @@ export function FloatingWindow() {
   }, []);
 
   useEffect(() => {
-    console.log("[FloatingWindow] Setting up event listeners");
     const unlistenExpanded = listen<boolean>(
       "floating-expanded",
       async (event) => {
-        console.log("[FloatingWindow] floating-expanded event:", event.payload);
         setIsActive(event.payload);
         if (event.payload) {
           setError(null);
@@ -213,24 +209,6 @@ export function FloatingWindow() {
     };
   }, [loadModeAndRules, updateBarsFromLevel, resetBars]);
 
-  const handleDragStart = useCallback(async (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest("button")) {
-      return;
-    }
-    try {
-      await getCurrentWindow().startDragging();
-      const position = await getCurrentWindow().outerPosition();
-      await invoke("save_floating_position", {
-        x: position.x,
-        y: position.y,
-      });
-    } catch (err) {
-      console.error("Failed to drag window:", err);
-    }
-  }, []);
-
-  console.log("[FloatingWindow] Render - isActive:", isActive, "activeMode:", activeMode);
-
   if (!isActive) {
     return null;
   }
@@ -238,8 +216,8 @@ export function FloatingWindow() {
   return (
     <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden">
       <div
+        data-tauri-drag-region
         className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in cursor-move"
-        onMouseDown={handleDragStart}
       >
         {/* Main status area */}
         <div className="flex items-center justify-center min-h-[36px] gap-3">
