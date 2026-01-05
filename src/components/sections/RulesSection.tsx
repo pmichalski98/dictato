@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { ICON_SIZES } from "@/lib/constants";
 import { SectionLayout } from "../layout/SectionLayout";
@@ -19,27 +19,31 @@ import { RuleItem } from "../RuleItem";
 import { AddRuleDialog } from "../AddRuleDialog";
 import { AddModeDialog } from "../AddModeDialog";
 import { ModeIcon, type IconName } from "../IconPicker";
-import { TranscriptionRule, TranscriptionMode, DEFAULT_MODES } from "@/hooks/useSettings";
+import { TranscriptionRule, TranscriptionMode } from "@/hooks/useSettings";
+import { getVisibleModes, NONE_MODE_ID, DEFAULT_MODES } from "@/lib/modes";
 import { cn } from "@/lib/utils";
 
 interface RulesSectionProps {
   rules: TranscriptionRule[];
   customModes: TranscriptionMode[];
   activeMode: string;
+  deletedBuiltInModes: string[];
   onToggle: (id: string) => void;
   onAdd: (title: string, description: string) => void;
   onUpdate: (id: string, updates: Partial<TranscriptionRule>) => void;
   onDelete: (id: string) => void;
   onUpdateActiveMode: (mode: string) => void;
-  onAddMode: (name: string, description: string, prompt: string, icon?: IconName) => void;
+  onAddMode: (name: string, description: string, prompt: string, icon?: IconName, isPromptCustom?: boolean) => void;
   onUpdateMode: (id: string, updates: Partial<TranscriptionMode>) => void;
   onDeleteMode: (id: string) => void;
+  onDeleteBuiltInMode: (id: string) => void;
 }
 
 export function RulesSection({
   rules,
   customModes,
   activeMode,
+  deletedBuiltInModes,
   onToggle,
   onAdd,
   onUpdate,
@@ -48,6 +52,7 @@ export function RulesSection({
   onAddMode,
   onUpdateMode,
   onDeleteMode,
+  onDeleteBuiltInMode,
 }: RulesSectionProps) {
   const [isRuleDialogOpen, setIsRuleDialogOpen] = useState(false);
   const [isModeDialogOpen, setIsModeDialogOpen] = useState(false);
@@ -55,8 +60,13 @@ export function RulesSection({
   const [editingMode, setEditingMode] = useState<TranscriptionMode | null>(null);
   const [modeToDelete, setModeToDelete] = useState<TranscriptionMode | null>(null);
 
-  const allModes = [...DEFAULT_MODES, ...customModes];
-  const selectedMode = allModes.find((m) => m.id === activeMode) ?? DEFAULT_MODES[0];
+  // Memoized visible modes list
+  const allModes = useMemo(
+    () => getVisibleModes(customModes, deletedBuiltInModes),
+    [customModes, deletedBuiltInModes]
+  );
+  const selectedMode = allModes.find((m) => m.id === activeMode);
+  const isNoModeActive = activeMode === NONE_MODE_ID || !selectedMode;
 
   const handleEditRule = (id: string) => {
     const rule = rules.find((r) => r.id === id);
@@ -80,7 +90,17 @@ export function RulesSection({
   };
 
   const handleEditMode = (mode: TranscriptionMode) => {
-    setEditingMode(mode);
+    if (mode.isBuiltIn) {
+      // For built-in modes, create a copy with prompt for editing
+      setEditingMode({
+        ...mode,
+        prompt: mode.prompt ?? "",
+        isBuiltIn: false, // Will be saved as custom
+        isPromptCustom: true,
+      });
+    } else {
+      setEditingMode(mode);
+    }
     setIsModeDialogOpen(true);
   };
 
@@ -89,16 +109,42 @@ export function RulesSection({
     setEditingMode(null);
   };
 
-  const handleSaveMode = (name: string, description: string, prompt: string, icon?: IconName) => {
-    onAddMode(name, description, prompt, icon);
+  const handleSaveMode = (name: string, description: string, prompt: string, icon?: IconName, isPromptCustom?: boolean) => {
+    onAddMode(name, description, prompt, icon, isPromptCustom);
   };
 
-  const handleUpdateMode = (id: string, name: string, description: string, prompt: string, icon?: IconName) => {
-    onUpdateMode(id, { name, description, prompt, icon });
+  const handleUpdateMode = (id: string, name: string, description: string, prompt: string, icon?: IconName, isPromptCustom?: boolean) => {
+    // Check if we're editing a built-in mode
+    const originalMode = [...DEFAULT_MODES, ...customModes].find((m) => m.id === id);
+    if (originalMode?.isBuiltIn) {
+      // Delete the built-in mode and create a new custom one
+      onDeleteBuiltInMode(id);
+      onAddMode(name, description, prompt, icon, isPromptCustom);
+    } else {
+      onUpdateMode(id, { name, description, prompt, icon, isPromptCustom });
+    }
+  };
+
+  const handleDeleteMode = (mode: TranscriptionMode) => {
+    if (mode.isBuiltIn) {
+      onDeleteBuiltInMode(mode.id);
+    } else {
+      onDeleteMode(mode.id);
+    }
+    setModeToDelete(null);
+  };
+
+  const handleModeClick = (modeId: string) => {
+    // Toggle behavior: clicking active mode deactivates it
+    if (activeMode === modeId) {
+      onUpdateActiveMode(NONE_MODE_ID);
+    } else {
+      onUpdateActiveMode(modeId);
+    }
   };
 
   const enabledCount = rules.filter((r) => r.enabled).length;
-  const isRulesDisabled = activeMode !== "none";
+  const isRulesDisabled = !isNoModeActive;
 
   return (
     <SectionLayout
@@ -110,44 +156,54 @@ export function RulesSection({
         <div>
           <Label className="text-[13px]">Transformation Mode</Label>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            {selectedMode.description}
+            {selectedMode?.description ?? "No mode active - using individual rules"}
           </p>
         </div>
 
-        {/* Toggle Buttons */}
-        <div className="flex flex-wrap gap-2">
+        {/* Mode List */}
+        <div className="space-y-1.5">
           {allModes.map((mode) => (
-            <div key={mode.id} className="flex items-center gap-1">
-              <button
-                onClick={() => onUpdateActiveMode(mode.id)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
-                  activeMode === mode.id
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80"
-                )}
-              >
-                {mode.icon && <ModeIcon icon={mode.icon} size={12} />}
-                {mode.name}
-              </button>
-              {!mode.isBuiltIn && (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => handleEditMode(mode)}
-                    className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
-                    title="Edit mode"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    onClick={() => setModeToDelete(mode)}
-                    className="p-1 text-muted-foreground hover:text-destructive transition-colors rounded"
-                    title="Delete mode"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
+            <div
+              key={mode.id}
+              className={cn(
+                "flex items-center justify-between px-3 py-2 rounded-lg border transition-colors cursor-pointer",
+                activeMode === mode.id
+                  ? "bg-primary/10 border-primary/30 text-foreground"
+                  : "bg-muted/30 border-transparent hover:bg-muted/50 text-muted-foreground hover:text-foreground"
               )}
+              onClick={() => handleModeClick(mode.id)}
+            >
+              <div className="flex items-center gap-2.5">
+                {mode.icon && (
+                  <ModeIcon
+                    icon={mode.icon}
+                    size={16}
+                    className={activeMode === mode.id ? "text-primary" : ""}
+                  />
+                )}
+                <span className="text-[13px] font-medium">{mode.name}</span>
+                {activeMode === mode.id && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary font-medium">
+                    Active
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                <button
+                  onClick={() => handleEditMode(mode)}
+                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors"
+                  title="Edit mode"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  onClick={() => setModeToDelete(mode)}
+                  className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                  title="Delete mode"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -223,8 +279,7 @@ export function RulesSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Mode</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{modeToDelete?.name}"? This action cannot be undone
-              and the custom prompt will be lost.
+              Are you sure you want to delete "{modeToDelete?.name}"? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -232,11 +287,10 @@ export function RulesSection({
             <AlertDialogAction
               onClick={() => {
                 if (modeToDelete) {
-                  onDeleteMode(modeToDelete.id);
-                  setModeToDelete(null);
+                  handleDeleteMode(modeToDelete);
                 }
               }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-red-600 text-white hover:bg-red-700"
             >
               Delete
             </AlertDialogAction>

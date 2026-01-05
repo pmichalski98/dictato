@@ -25,6 +25,7 @@ export function Settings() {
     addMode,
     updateMode,
     deleteMode,
+    deleteBuiltInMode,
   } = useSettings();
 
   const {
@@ -77,6 +78,7 @@ export function Settings() {
           rules={settings.transcriptionRules}
           customModes={settings.customModes}
           activeMode={settings.activeMode}
+          deletedBuiltInModes={settings.deletedBuiltInModes}
           onToggle={toggleRule}
           onAdd={addRule}
           onUpdate={updateRule}
@@ -85,6 +87,7 @@ export function Settings() {
           onAddMode={addMode}
           onUpdateMode={updateMode}
           onDeleteMode={deleteMode}
+          onDeleteBuiltInMode={deleteBuiltInMode}
         />
       </div>
 
