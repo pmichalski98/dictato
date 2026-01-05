@@ -4,6 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 
 interface UpdateState {
   available: boolean;
+  showDialog: boolean;
   update: Update | null;
   currentVersion: string;
   newVersion: string;
@@ -15,6 +16,7 @@ interface UpdateState {
 
 const initialState: UpdateState = {
   available: false,
+  showDialog: false,
   update: null,
   currentVersion: "",
   newVersion: "",
@@ -90,8 +92,12 @@ export function useUpdateCheck() {
     }
   }, [state.update]);
 
+  const openDialog = useCallback(() => {
+    setState((prev) => ({ ...prev, showDialog: true }));
+  }, []);
+
   const dismiss = useCallback(() => {
-    setState(initialState);
+    setState((prev) => ({ ...prev, showDialog: false }));
   }, []);
 
   useEffect(() => {
@@ -102,6 +108,7 @@ export function useUpdateCheck() {
     ...state,
     checkForUpdates,
     downloadAndInstall,
+    openDialog,
     dismiss,
   };
 }

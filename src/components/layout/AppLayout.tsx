@@ -8,6 +8,9 @@ interface AppLayoutProps {
   isCollapsed: boolean;
   onNavigate: (section: Section) => void;
   onToggleCollapsed: () => void;
+  updateAvailable?: boolean;
+  newVersion?: string;
+  onOpenUpdateDialog?: () => void;
 }
 
 export function AppLayout({
@@ -16,6 +19,9 @@ export function AppLayout({
   isCollapsed,
   onNavigate,
   onToggleCollapsed,
+  updateAvailable,
+  newVersion,
+  onOpenUpdateDialog,
 }: AppLayoutProps) {
   return (
     <div className="flex h-screen bg-background">
@@ -24,6 +30,9 @@ export function AppLayout({
         isCollapsed={isCollapsed}
         onNavigate={onNavigate}
         onToggleCollapsed={onToggleCollapsed}
+        updateAvailable={updateAvailable}
+        newVersion={newVersion}
+        onOpenUpdateDialog={onOpenUpdateDialog}
       />
       <main className="flex-1 overflow-auto">
         {children}

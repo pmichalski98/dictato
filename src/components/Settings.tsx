@@ -7,7 +7,13 @@ import { RulesSection } from "./sections/RulesSection";
 import { DictionarySection } from "./sections/DictionarySection";
 import { HistorySection } from "./sections/HistorySection";
 
-export function Settings() {
+interface SettingsProps {
+  updateAvailable?: boolean;
+  newVersion?: string;
+  onOpenUpdateDialog?: () => void;
+}
+
+export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: SettingsProps) {
   const {
     settings,
     isLoading: isSettingsLoading,
@@ -50,6 +56,9 @@ export function Settings() {
       isCollapsed={isCollapsed}
       onNavigate={navigateTo}
       onToggleCollapsed={toggleCollapsed}
+      updateAvailable={updateAvailable}
+      newVersion={newVersion}
+      onOpenUpdateDialog={onOpenUpdateDialog}
     >
       <div className={activeSection === "general" ? "block" : "hidden"}>
         <GeneralSection
