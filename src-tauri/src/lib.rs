@@ -583,8 +583,8 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
             .visible(false)
             .transparent(true);
 
-    // On Windows, disable shadow to fix transparency
-    #[cfg(target_os = "windows")]
+    // Disable shadow to fix transparency on Windows and macOS
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         builder = builder.shadow(false);
     }
