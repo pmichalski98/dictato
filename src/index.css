@@ -78,9 +78,11 @@ body {
 }
 
 /* Transparent background for floating window */
+html:has(body.floating-window),
 body.floating-window,
 body.floating-window #root {
   background-color: transparent !important;
+  background: transparent !important;
 }
 
 /* Custom dropdown arrow for selects */

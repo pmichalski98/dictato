@@ -120,6 +120,14 @@ export function FloatingWindow() {
         setActiveMode(savedMode);
       }
 
+      // Load saved skipRules state
+      const savedSkipRules = await store.get<string>(STORE_KEYS.SKIP_RULES_ONCE);
+      if (savedSkipRules === "true") {
+        setSkipRules(true);
+      } else {
+        setSkipRules(false);
+      }
+
       const rulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
       if (rulesJson) {
         try {
@@ -209,8 +217,6 @@ export function FloatingWindow() {
         if (event.payload) {
           setError(null);
           setIsProcessing(false);
-          setSkipRules(false);
-          await store.set(STORE_KEYS.SKIP_RULES_ONCE, "false");
           const savedCancelShortcut = await store.get<string>(
             STORE_KEYS.CANCEL_SHORTCUT
           );
