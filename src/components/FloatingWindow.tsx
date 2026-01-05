@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { ListChecks } from "lucide-react";
 import { formatShortcut } from "@/lib/shortcuts";
 import { STORE_KEYS } from "@/lib/storeKeys";
+import { getVisibleModes, NONE_MODE_ID } from "@/lib/modes";
 import { CheckIcon } from "@/components/ui/icons";
 import { ModeIcon } from "@/components/IconPicker";
 import {
@@ -14,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TranscriptionRule, TranscriptionMode, DEFAULT_MODES } from "@/hooks/useSettings";
+import { TranscriptionRule, TranscriptionMode } from "@/hooks/useSettings";
 
 const store = new LazyStore("settings.json");
 
@@ -50,15 +51,20 @@ export function FloatingWindow() {
   );
   const [skipRules, setSkipRules] = useState(false);
   const [hasEnabledRules, setHasEnabledRules] = useState(false);
-  const [activeMode, setActiveMode] = useState("none");
+  const [activeMode, setActiveMode] = useState<string>(NONE_MODE_ID);
   const [customModes, setCustomModes] = useState<TranscriptionMode[]>([]);
+  const [deletedBuiltInModes, setDeletedBuiltInModes] = useState<string[]>([]);
 
   // Ref to store previous bar heights for smooth animation
   const prevBarHeightsRef = useRef<number[]>(
     Array(BAR_COUNT).fill(MIN_BAR_HEIGHT)
   );
 
-  const allModes = [...DEFAULT_MODES, ...customModes];
+  // Memoized visible modes list
+  const allModes = useMemo(
+    () => getVisibleModes(customModes, deletedBuiltInModes),
+    [customModes, deletedBuiltInModes]
+  );
 
   // Update bars based on audio level from native capture
   const updateBarsFromLevel = useCallback((level: number) => {
@@ -113,46 +119,85 @@ export function FloatingWindow() {
       if (savedMode) {
         setActiveMode(savedMode);
       }
+
       const rulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
       if (rulesJson) {
-        const parsedRules: TranscriptionRule[] = JSON.parse(rulesJson);
-        const hasEnabled = parsedRules.some((r) => r.enabled);
-        setHasEnabledRules(hasEnabled);
+        try {
+          const parsedRules: TranscriptionRule[] = JSON.parse(rulesJson);
+          const hasEnabled = parsedRules.some((r) => r.enabled);
+          setHasEnabledRules(hasEnabled);
+        } catch {
+          console.error("Failed to parse transcription rules");
+        }
       }
+
       const customModesJson = await store.get<string>(STORE_KEYS.CUSTOM_MODES);
       if (customModesJson) {
-        const parsedModes: TranscriptionMode[] = JSON.parse(customModesJson);
-        setCustomModes(parsedModes);
+        try {
+          const parsedModes: TranscriptionMode[] = JSON.parse(customModesJson);
+          setCustomModes(parsedModes);
+        } catch {
+          console.error("Failed to parse custom modes");
+        }
+      }
+
+      const deletedModesJson = await store.get<string>(STORE_KEYS.DELETED_BUILTIN_MODES);
+      if (deletedModesJson) {
+        try {
+          const parsedDeleted: string[] = JSON.parse(deletedModesJson);
+          setDeletedBuiltInModes(parsedDeleted);
+        } catch {
+          console.error("Failed to parse deleted built-in modes");
+        }
       }
     } catch (err) {
       console.error("Failed to load mode/rules:", err);
     }
   }, []);
 
-  const updateActiveMode = useCallback(async (modeId: string) => {
-    setActiveMode(modeId);
-    // When selecting "None", skip rules (no transformation)
-    if (modeId === "none") {
-      setSkipRules(true);
+  const handleModeClick = useCallback(async (modeId: string) => {
+    // Toggle behavior: clicking active mode deactivates it
+    const newModeId = activeMode === modeId ? NONE_MODE_ID : modeId;
+    setActiveMode(newModeId);
+
+    // When deactivating (to "none"), check if we should use rules
+    if (newModeId === NONE_MODE_ID) {
+      setSkipRules(!hasEnabledRules);
+    } else {
+      setSkipRules(false);
     }
+
     try {
-      await store.set(STORE_KEYS.ACTIVE_MODE, modeId);
-      if (modeId === "none") {
+      await store.set(STORE_KEYS.ACTIVE_MODE, newModeId);
+      if (newModeId === NONE_MODE_ID && !hasEnabledRules) {
         await store.set(STORE_KEYS.SKIP_RULES_ONCE, "true");
+      } else {
+        await store.set(STORE_KEYS.SKIP_RULES_ONCE, "false");
       }
     } catch (err) {
       console.error("Failed to save active mode:", err);
     }
-  }, []);
+  }, [activeMode, hasEnabledRules]);
 
   const selectDefaultRules = useCallback(async () => {
-    setActiveMode("none");
+    setActiveMode(NONE_MODE_ID);
     setSkipRules(false);
     try {
-      await store.set(STORE_KEYS.ACTIVE_MODE, "none");
+      await store.set(STORE_KEYS.ACTIVE_MODE, NONE_MODE_ID);
       await store.set(STORE_KEYS.SKIP_RULES_ONCE, "false");
     } catch (err) {
       console.error("Failed to set default rules mode:", err);
+    }
+  }, []);
+
+  const selectNone = useCallback(async () => {
+    setActiveMode(NONE_MODE_ID);
+    setSkipRules(true);
+    try {
+      await store.set(STORE_KEYS.ACTIVE_MODE, NONE_MODE_ID);
+      await store.set(STORE_KEYS.SKIP_RULES_ONCE, "true");
+    } catch (err) {
+      console.error("Failed to set none mode:", err);
     }
   }, []);
 
@@ -210,6 +255,11 @@ export function FloatingWindow() {
       }
     );
 
+    // Listen for mode updates from Settings window
+    const unlistenModesUpdated = listen("modes-updated", () => {
+      loadModeAndRules();
+    });
+
     return () => {
       resetBars();
       unlistenExpanded.then((fn) => fn());
@@ -217,6 +267,7 @@ export function FloatingWindow() {
       unlistenError.then((fn) => fn());
       unlistenProcessing.then((fn) => fn());
       unlistenProcessingMessage.then((fn) => fn());
+      unlistenModesUpdated.then((fn) => fn());
     };
   }, [loadModeAndRules, updateBarsFromLevel, resetBars]);
 
@@ -243,16 +294,16 @@ export function FloatingWindow() {
                     className={`
                       flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200
                       ${
-                        activeMode !== "none"
+                        activeMode !== NONE_MODE_ID
                           ? "bg-violet-500/30 text-violet-300"
                           : hasEnabledRules && !skipRules
                             ? "bg-blue-500/30 text-blue-300"
                             : "bg-zinc-600/30 text-zinc-400"
                       }
                     `}
-                    title={activeMode === "none" && hasEnabledRules && !skipRules ? "Default Rules" : currentMode?.name ?? "None"}
+                    title={activeMode === NONE_MODE_ID && hasEnabledRules && !skipRules ? "Default Rules" : currentMode?.name ?? "None"}
                   >
-                    {activeMode === "none" && hasEnabledRules && !skipRules ? (
+                    {activeMode === NONE_MODE_ID && hasEnabledRules && !skipRules ? (
                       <ListChecks size={16} />
                     ) : currentMode?.icon ? (
                       <ModeIcon icon={currentMode.icon} size={16} />
@@ -264,13 +315,11 @@ export function FloatingWindow() {
                 <DropdownMenuContent align="start" side="bottom">
                   <DropdownMenuLabel>Mode</DropdownMenuLabel>
                   {allModes.map((mode) => {
-                    const isSelected = mode.id === "none"
-                      ? activeMode === "none" && skipRules
-                      : activeMode === mode.id;
+                    const isSelected = activeMode === mode.id;
                     return (
                       <DropdownMenuItem
                         key={mode.id}
-                        onClick={() => updateActiveMode(mode.id)}
+                        onClick={() => handleModeClick(mode.id)}
                         className={isSelected ? "bg-violet-500/20 text-violet-300" : ""}
                       >
                         <span className="flex items-center gap-2 flex-1">
@@ -293,17 +342,32 @@ export function FloatingWindow() {
                       <DropdownMenuItem
                         onClick={selectDefaultRules}
                         className={
-                          activeMode === "none" && !skipRules ? "bg-blue-500/20 text-blue-300" : ""
+                          activeMode === NONE_MODE_ID && !skipRules ? "bg-blue-500/20 text-blue-300" : ""
                         }
                       >
                         <span className="flex items-center gap-2 flex-1">
                           <ListChecks size={14} />
                           <span>Default Rules</span>
                         </span>
-                        {activeMode === "none" && !skipRules && <CheckIcon />}
+                        {activeMode === NONE_MODE_ID && !skipRules && <CheckIcon />}
                       </DropdownMenuItem>
                     </>
                   )}
+
+                  {/* None option - pure transcription without any processing */}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={selectNone}
+                    className={
+                      activeMode === NONE_MODE_ID && skipRules ? "bg-zinc-500/20 text-zinc-300" : ""
+                    }
+                  >
+                    <span className="flex items-center gap-2 flex-1">
+                      <ModeIcon icon="Circle" size={14} />
+                      <span>None</span>
+                    </span>
+                    {activeMode === NONE_MODE_ID && skipRules && <CheckIcon />}
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

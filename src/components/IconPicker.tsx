@@ -126,7 +126,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
             type="button"
             onClick={() => onChange(iconName)}
             className={cn(
-              "p-2 rounded-md transition-colors hover:bg-muted",
+              "w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:bg-muted",
               value === iconName && "bg-primary/20 text-primary ring-1 ring-primary/50"
             )}
             title={iconName}

@@ -559,6 +559,12 @@ fn save_floating_position(app: AppHandle, x: f64, y: f64) {
     }
 }
 
+#[tauri::command]
+async fn generate_mode_prompt(app: AppHandle, name: String, description: String) -> Result<String, String> {
+    let api_key = get_groq_api_key_from_store(&app).ok_or("No API key configured")?;
+    llm::generate_mode_prompt(&api_key, &name, &description).await
+}
+
 fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window("floating").is_some() {
         return Ok(());
@@ -710,6 +716,7 @@ pub fn run() {
             get_recording_state,
             list_audio_devices,
             save_floating_position,
+            generate_mode_prompt,
         ])
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;
