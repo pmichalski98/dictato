@@ -9,6 +9,7 @@ export const STORE_KEYS = {
   CUSTOM_MODES: "customModes",
   DELETED_BUILTIN_MODES: "deletedBuiltInModes",
   GROQ_API_KEY: "groqApiKey",
+  OPENAI_API_KEY: "openaiApiKey",
   LANGUAGE: "language",
   CANCEL_SHORTCUT: "cancelShortcut",
   SHORTCUT: "shortcut",
