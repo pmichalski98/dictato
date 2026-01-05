@@ -34,6 +34,7 @@ mod store_keys {
     pub const TRANSCRIPTION_RULES: &str = "transcriptionRules";
     pub const CUSTOM_MODES: &str = "customModes";
     pub const GROQ_API_KEY: &str = "groqApiKey";
+    pub const OPENAI_API_KEY: &str = "openaiApiKey";
     pub const LANGUAGE: &str = "language";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
     pub const AUTO_PASTE: &str = "autoPaste";
@@ -170,19 +171,20 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
 
     groq_state.clear_buffer();
 
-    let api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
+    let groq_api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
+    let openai_api_key = get_openai_api_key_from_store(&app);
     let language = get_language_from_store(&app);
-    let transcript = if audio_data.is_empty() || api_key.is_empty() {
+    let transcript = if audio_data.is_empty() || groq_api_key.is_empty() {
         println!(
-            "[Dictato] Skipping transcription: audio_empty={}, api_key_empty={}",
+            "[Dictato] Skipping transcription: audio_empty={}, groq_api_key_empty={}",
             audio_data.is_empty(),
-            api_key.is_empty()
+            groq_api_key.is_empty()
         );
         String::new()
     } else {
         println!("[Dictato] Sending {} bytes to Groq API", audio_data.len());
         app.emit("processing-state", true).ok();
-        let result = groq::transcribe(&api_key, audio_data, &language).await;
+        let result = groq::transcribe(&groq_api_key, audio_data, &language).await;
         match result {
             Ok(text) => text,
             Err(e) => {
@@ -193,6 +195,8 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     };
 
     // Apply mode transformation or rules (modes take priority over rules)
+    // Uses OpenAI API for LLM operations
+    let mut had_openai_error = false;
     let final_text = if !transcript.is_empty() {
         let skip_rules = should_skip_rules(&app);
         if skip_rules {
@@ -201,16 +205,24 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         } else if let Some(mode_id) = get_active_mode_from_store(&app) {
             // Mode is active - get prompt and apply transformation (rules are ignored)
             if let Some(prompt) = get_mode_prompt_from_store(&app, &mode_id) {
-                app.emit("processing-message", "Applying mode...").ok();
-                match llm::process_with_prompt(&api_key, &transcript, &prompt).await {
-                    Ok(processed) => {
-                        println!("[Dictato] Mode '{}' applied successfully", mode_id);
-                        processed
+                // Check for OpenAI API key
+                if let Some(ref openai_key) = openai_api_key {
+                    app.emit("processing-message", "Applying mode...").ok();
+                    match llm::process_with_prompt(openai_key, &transcript, &prompt).await {
+                        Ok(processed) => {
+                            println!("[Dictato] Mode '{}' applied successfully", mode_id);
+                            processed
+                        }
+                        Err(e) => {
+                            eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
+                            transcript
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
-                        transcript
-                    }
+                } else {
+                    // No OpenAI key - show error and return raw transcript
+                    had_openai_error = true;
+                    show_error(&app, "No OpenAI key - mode skipped. Raw transcription copied. Add key in Settings to use modes.");
+                    transcript
                 }
             } else {
                 println!("[Dictato] Mode '{}' not found, using raw transcript", mode_id);
@@ -221,16 +233,24 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
-                app.emit("processing-message", "Applying rules...").ok();
-                match llm::process_with_rules(&api_key, &transcript, rules).await {
-                    Ok(processed) => {
-                        println!("[Dictato] Rules applied successfully");
-                        processed
+                // Check for OpenAI API key
+                if let Some(ref openai_key) = openai_api_key {
+                    app.emit("processing-message", "Applying rules...").ok();
+                    match llm::process_with_rules(openai_key, &transcript, rules).await {
+                        Ok(processed) => {
+                            println!("[Dictato] Rules applied successfully");
+                            processed
+                        }
+                        Err(e) => {
+                            eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
+                            transcript
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
-                        transcript
-                    }
+                } else {
+                    // No OpenAI key - show error and return raw transcript
+                    had_openai_error = true;
+                    show_error(&app, "No OpenAI key - rules skipped. Raw transcription copied. Add key in Settings to use rules.");
+                    transcript
                 }
             } else {
                 transcript
@@ -241,7 +261,11 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     };
 
     app.emit("processing-state", false).ok();
-    collapse_floating_window(&app)?;
+
+    // Don't collapse window if there was an OpenAI error - let show_error handle it
+    if !had_openai_error {
+        collapse_floating_window(&app)?;
+    }
 
     if !final_text.is_empty() {
         copy_and_paste(app, final_text).await?;
@@ -482,6 +506,10 @@ fn get_groq_api_key_from_store(app: &AppHandle) -> Option<String> {
     get_store_string(app, store_keys::GROQ_API_KEY)
 }
 
+fn get_openai_api_key_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, store_keys::OPENAI_API_KEY)
+}
+
 fn get_language_from_store(app: &AppHandle) -> String {
     get_store_string(app, store_keys::LANGUAGE).unwrap_or_else(|| "en".to_string())
 }
@@ -561,7 +589,8 @@ fn save_floating_position(app: AppHandle, x: f64, y: f64) {
 
 #[tauri::command]
 async fn generate_mode_prompt(app: AppHandle, name: String, description: String) -> Result<String, String> {
-    let api_key = get_groq_api_key_from_store(&app).ok_or("No API key configured")?;
+    let api_key = get_openai_api_key_from_store(&app)
+        .ok_or("OpenAI API key required for prompt generation. Add it in Settings.")?;
     llm::generate_mode_prompt(&api_key, &name, &description).await
 }
 

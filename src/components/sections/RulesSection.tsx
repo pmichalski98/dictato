@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { ICON_SIZES } from "@/lib/constants";
 import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
@@ -28,6 +28,7 @@ interface RulesSectionProps {
   customModes: TranscriptionMode[];
   activeMode: string;
   deletedBuiltInModes: string[];
+  hasOpenaiKey: boolean;
   onToggle: (id: string) => void;
   onAdd: (title: string, description: string) => void;
   onUpdate: (id: string, updates: Partial<TranscriptionRule>) => void;
@@ -44,6 +45,7 @@ export function RulesSection({
   customModes,
   activeMode,
   deletedBuiltInModes,
+  hasOpenaiKey,
   onToggle,
   onAdd,
   onUpdate,
@@ -139,6 +141,7 @@ export function RulesSection({
     if (activeMode === modeId) {
       onUpdateActiveMode(NONE_MODE_ID);
     } else {
+      // Allow selecting mode even without key - warning is shown in UI
       onUpdateActiveMode(modeId);
     }
   };
@@ -151,6 +154,23 @@ export function RulesSection({
       title="Rules & Modes"
       description="Transform your transcriptions with AI-powered rules"
     >
+      {/* OpenAI Key Warning */}
+      {!hasOpenaiKey && (activeMode !== NONE_MODE_ID || enabledCount > 0) && (
+        <div className="flex items-start gap-2.5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-4">
+          <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <p className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
+              OpenAI API key required
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              You have {activeMode !== NONE_MODE_ID ? "a mode" : "rules"} enabled, but no OpenAI key configured.
+              Your transcriptions will be copied without AI transformation.
+              Add your OpenAI key in Settings → General to use these features.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Mode Selector */}
       <Card className="space-y-3">
         <div>
