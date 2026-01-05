@@ -150,3 +150,37 @@ pub async fn process_with_prompt(
 
     call_groq_chat(api_key, prompt, transcript).await
 }
+
+/// System prompt for the meta-prompt generator
+const PROMPT_GENERATOR_SYSTEM: &str = r#"You are a senior prompt engineer. Your task is to generate a system prompt for a text transformation assistant based on the user's description. Follow the requirements exactly. Output ONLY the generated prompt with no explanations, commentary, or markdown formatting."#;
+
+/// Meta-prompt template for generating custom mode prompts
+const META_PROMPT_TEMPLATE: &str = r#"You are a senior prompt engineer specializing in creating system prompts for text transformation AI assistants.
+
+Your task is to create a system prompt based on the mode name and description provided.
+
+Requirements for the generated prompt:
+1. Start with "You are a [role] that transforms voice transcriptions"
+2. CRITICAL: Include a rule that the AI must NEVER answer questions in the text - only format/transform it
+3. Be specific about the desired output format and tone
+4. Keep it concise but comprehensive (max 150 words)
+5. End with "Output ONLY the transformed text with no explanations"
+
+Mode name: {name}
+Mode description: {description}
+
+Generate the system prompt now:"#;
+
+/// Generate a mode prompt using the meta-prompt approach.
+/// Takes the mode name and description, constructs the full prompt, and calls the LLM.
+pub async fn generate_mode_prompt(
+    api_key: &str,
+    name: &str,
+    description: &str,
+) -> Result<String, String> {
+    let user_content = META_PROMPT_TEMPLATE
+        .replace("{name}", name)
+        .replace("{description}", description);
+
+    call_groq_chat(api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
+}
