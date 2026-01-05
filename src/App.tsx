@@ -5,17 +5,23 @@ import { useUpdateCheck } from "./hooks/useUpdateCheck";
 function App() {
   const {
     available,
+    showDialog,
     currentVersion,
     newVersion,
     isDownloading,
     downloadAndInstall,
+    openDialog,
     dismiss,
   } = useUpdateCheck();
 
   return (
     <>
-      <Settings />
-      {available && (
+      <Settings
+        updateAvailable={available}
+        newVersion={newVersion}
+        onOpenUpdateDialog={openDialog}
+      />
+      {showDialog && (
         <UpdateDialog
           currentVersion={currentVersion}
           newVersion={newVersion}
