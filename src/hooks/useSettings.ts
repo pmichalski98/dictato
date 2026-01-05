@@ -30,6 +30,7 @@ export interface TranscriptionMode {
 
 interface Settings {
   groqApiKey: string;
+  openaiApiKey: string;
   language: string;
   shortcut: string;
   cancelShortcut: string;
@@ -81,6 +82,7 @@ const DEFAULT_RULES: TranscriptionRule[] = [
 
 const DEFAULT_SETTINGS: Settings = {
   groqApiKey: "",
+  openaiApiKey: "",
   language: "en",
   shortcut: "CommandOrControl+Shift+Space",
   cancelShortcut: "Escape",
@@ -102,6 +104,7 @@ export function useSettings() {
     async function loadSettings() {
       try {
         const groqApiKey = await store.get<string>(STORE_KEYS.GROQ_API_KEY);
+        const openaiApiKey = await store.get<string>(STORE_KEYS.OPENAI_API_KEY);
         const language = await store.get<string>(STORE_KEYS.LANGUAGE);
         const shortcut = await store.get<string>(STORE_KEYS.SHORTCUT);
         const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
@@ -141,6 +144,7 @@ export function useSettings() {
 
         setSettings({
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
+          openaiApiKey: openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
           language: language ?? DEFAULT_SETTINGS.language,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
@@ -185,6 +189,15 @@ export function useSettings() {
       setSettings((prev) => ({ ...prev, groqApiKey }));
     } catch (err) {
       console.error("Failed to save Groq API key:", err);
+    }
+  }, []);
+
+  const updateOpenaiApiKey = useCallback(async (openaiApiKey: string) => {
+    try {
+      await store.set(STORE_KEYS.OPENAI_API_KEY, openaiApiKey);
+      setSettings((prev) => ({ ...prev, openaiApiKey }));
+    } catch (err) {
+      console.error("Failed to save OpenAI API key:", err);
     }
   }, []);
 
@@ -332,6 +345,7 @@ export function useSettings() {
     settings,
     isLoading,
     updateGroqApiKey,
+    updateOpenaiApiKey,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
-const GROQ_API_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_MODEL: &str = "llama-3.1-8b-instant";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranscriptionRule {
@@ -44,8 +44,8 @@ struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
 
-/// Shared function to make Groq chat API calls
-async fn call_groq_chat(
+/// Shared function to make OpenAI chat API calls
+async fn call_openai_chat(
     api_key: &str,
     system_prompt: &str,
     user_content: &str,
@@ -72,7 +72,7 @@ async fn call_groq_chat(
         .map_err(|e| format!("Failed to create client: {}", e))?;
 
     let response = client
-        .post(GROQ_API_URL)
+        .post(OPENAI_API_URL)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&request)
@@ -83,7 +83,7 @@ async fn call_groq_chat(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Groq Chat API error {}: {}", status, body));
+        return Err(format!("OpenAI API error {}: {}", status, body));
     }
 
     let result: ChatResponse = response
@@ -135,7 +135,7 @@ Output ONLY the formatted text with no explanations."#,
         rules_text
     );
 
-    call_groq_chat(api_key, &system_prompt, transcript).await
+    call_openai_chat(api_key, &system_prompt, transcript).await
 }
 
 /// Process transcript with a custom system prompt
@@ -148,7 +148,7 @@ pub async fn process_with_prompt(
         return Ok(transcript.to_string());
     }
 
-    call_groq_chat(api_key, prompt, transcript).await
+    call_openai_chat(api_key, prompt, transcript).await
 }
 
 /// System prompt for the meta-prompt generator
@@ -182,5 +182,5 @@ pub async fn generate_mode_prompt(
         .replace("{name}", name)
         .replace("{description}", description);
 
-    call_groq_chat(api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
+    call_openai_chat(api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
 }

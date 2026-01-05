@@ -18,6 +18,7 @@ export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: Se
     settings,
     isLoading: isSettingsLoading,
     updateGroqApiKey,
+    updateOpenaiApiKey,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,
@@ -63,7 +64,9 @@ export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: Se
       <div className={activeSection === "general" ? "block" : "hidden"}>
         <GeneralSection
           groqApiKey={settings.groqApiKey}
-          onSaveApiKey={updateGroqApiKey}
+          openaiApiKey={settings.openaiApiKey}
+          onSaveGroqApiKey={updateGroqApiKey}
+          onSaveOpenaiApiKey={updateOpenaiApiKey}
         />
       </div>
 
@@ -88,6 +91,7 @@ export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: Se
           customModes={settings.customModes}
           activeMode={settings.activeMode}
           deletedBuiltInModes={settings.deletedBuiltInModes}
+          hasOpenaiKey={!!settings.openaiApiKey}
           onToggle={toggleRule}
           onAdd={addRule}
           onUpdate={updateRule}
