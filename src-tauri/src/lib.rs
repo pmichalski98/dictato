@@ -26,6 +26,9 @@ const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 // Audio processing constants
 const AUDIO_STOP_DRAIN_MS: u64 = 150; // Time to let receiver threads drain after audio stop
 
+// Statistics calculation constants
+const AVERAGE_TYPING_WPM: f64 = 40.0; // Average typing speed for time-saved calculations
+
 // Store keys
 mod store_keys {
     pub const FLOATING_X: &str = "floatingX";
@@ -40,6 +43,9 @@ mod store_keys {
     pub const AUTO_PASTE: &str = "autoPaste";
     pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
     pub const ACTIVE_MODE: &str = "activeMode";
+    pub const STATS_TOTAL_WORDS: &str = "statsTotalWords";
+    pub const STATS_TOTAL_TRANSCRIPTIONS: &str = "statsTotalTranscriptions";
+    pub const STATS_TOTAL_TIME_SAVED_SECONDS: &str = "statsTotalTimeSavedSeconds";
 }
 
 // Built-in mode prompts
@@ -268,6 +274,52 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     }
 
     if !final_text.is_empty() {
+        // Update statistics
+        if let Ok(store) = app.store("settings.json") {
+            let word_count = final_text.split_whitespace().count() as i64;
+
+            let current_words = store
+                .get(store_keys::STATS_TOTAL_WORDS)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let current_transcriptions = store
+                .get(store_keys::STATS_TOTAL_TRANSCRIPTIONS)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let current_time = store
+                .get(store_keys::STATS_TOTAL_TIME_SAVED_SECONDS)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+
+            // Calculate time saved: (words / WPM) * 60 = seconds
+            let time_saved_seconds = (word_count as f64 / AVERAGE_TYPING_WPM) * 60.0;
+
+            store.set(
+                store_keys::STATS_TOTAL_WORDS,
+                serde_json::json!(current_words + word_count),
+            );
+            store.set(
+                store_keys::STATS_TOTAL_TRANSCRIPTIONS,
+                serde_json::json!(current_transcriptions + 1),
+            );
+            store.set(
+                store_keys::STATS_TOTAL_TIME_SAVED_SECONDS,
+                serde_json::json!(current_time + time_saved_seconds),
+            );
+            store.save().ok();
+
+            // Emit stats update event for frontend
+            app.emit(
+                "stats-updated",
+                serde_json::json!({
+                    "totalWords": current_words + word_count,
+                    "totalTranscriptions": current_transcriptions + 1,
+                    "totalTimeSavedSeconds": current_time + time_saved_seconds
+                }),
+            )
+            .ok();
+        }
+
         copy_and_paste(app, final_text).await?;
     }
 
