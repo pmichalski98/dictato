@@ -7,6 +7,7 @@ import {
   Clock,
   PanelLeftClose,
   PanelLeft,
+  FileAudio,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ const navigationItems: NavigationItem[] = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "recording", label: "Recording", icon: Mic },
   { id: "rules", label: "Rules & Modes", icon: Sparkles },
+  { id: "transcribe", label: "Transcribe", icon: FileAudio },
   { id: "dictionary", label: "Dictionary", icon: BookText },
   { id: "history", label: "History", icon: Clock },
 ];

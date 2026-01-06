@@ -12,9 +12,13 @@ Voice-to-text transcription app with AI-powered text transformation.
 
 - [ ] **Tryb offline (lokalny model)** (~8-12h) - integracja z NVIDIA Parakeet lub Whisper.cpp dla lokalnej transkrypcji bez potrzeby API
 
-- [ ] **Transkrypcja z pliku** (~3-4h) - drag & drop plików audio do okna
+- [x] **Transkrypcja z pliku i YouTube** - drag & drop plików audio/video oraz transkrypcja z linków YouTube (wymaga yt-dlp i ffmpeg)
 
 - [x] **Statystyki zaoszczędzonego czasu** - pokazuje ile czasu użytkownik zaoszczędził używając dyktowania vs pisania manualnego (bazując na liczbie słów i średniej prędkości pisania ~40 słów/min)
+
+- [ ] **Wsparcie dla innych platform** (~4-6h) - rozszerzenie transkrypcji URL o inne serwisy obsługiwane przez yt-dlp (Vimeo, TikTok, SoundCloud, Twitch VOD, etc.)
+
+- [ ] **Generowanie podsumowań** (~3-4h) - automatyczne generowanie podsumowań dla transkrypcji (bullet points, kluczowe wnioski) z wykorzystaniem LLM
 
 ### Nice to Have
 

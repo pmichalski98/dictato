@@ -26,6 +26,9 @@ export const STORE_KEYS = {
   STATS_TOTAL_WORDS: "statsTotalWords",
   STATS_TOTAL_TRANSCRIPTIONS: "statsTotalTranscriptions",
   STATS_TOTAL_TIME_SAVED_SECONDS: "statsTotalTimeSavedSeconds",
+  TRANSCRIPTION_HISTORY: "transcriptionHistory",
+  TRANSCRIBE_LANGUAGE: "transcribeLanguage",
+  TRANSCRIBE_APPLY_RULES: "transcribeApplyRules",
 } as const;
 
 export type StoreKey = (typeof STORE_KEYS)[keyof typeof STORE_KEYS];

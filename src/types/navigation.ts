@@ -1,6 +1,12 @@
 import { ComponentType } from "react";
 
-export type Section = "general" | "recording" | "rules" | "dictionary" | "history";
+export type Section =
+  | "general"
+  | "recording"
+  | "rules"
+  | "transcribe"
+  | "dictionary"
+  | "history";
 
 export interface NavigationItem {
   id: Section;

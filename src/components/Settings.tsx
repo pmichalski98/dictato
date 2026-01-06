@@ -4,6 +4,7 @@ import { AppLayout } from "./layout/AppLayout";
 import { GeneralSection } from "./sections/GeneralSection";
 import { RecordingSection } from "./sections/RecordingSection";
 import { RulesSection } from "./sections/RulesSection";
+import { TranscribeSection } from "./sections/TranscribeSection";
 import { DictionarySection } from "./sections/DictionarySection";
 import { HistorySection } from "./sections/HistorySection";
 
@@ -102,6 +103,10 @@ export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: Se
           onDeleteMode={deleteMode}
           onDeleteBuiltInMode={deleteBuiltInMode}
         />
+      </div>
+
+      <div className={activeSection === "transcribe" ? "block" : "hidden"}>
+        <TranscribeSection />
       </div>
 
       <div className={activeSection === "dictionary" ? "block" : "hidden"}>

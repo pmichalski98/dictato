@@ -1,5 +1,6 @@
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,7 +8,8 @@ const MAX_BUFFER_SIZE: usize = 24 * 1024 * 1024; // 24MB (under Groq's 25MB limi
 const SAMPLE_RATE: u32 = 24000;
 const CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
-const REQUEST_TIMEOUT_SECS: u64 = 30;
+const REQUEST_TIMEOUT_SECS: u64 = 120; // Increased timeout for large files
+const MAX_RETRIES: u32 = 3;
 
 #[derive(Clone)]
 pub struct GroqState {
@@ -124,4 +126,119 @@ pub async fn transcribe(api_key: &str, audio_data: Vec<u8>, language: &str) -> R
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     Ok(result.text)
+}
+
+/// Get MIME type for audio file extension
+fn get_mime_type(extension: &str) -> &'static str {
+    match extension {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "webm" => "audio/webm",
+        _ => "audio/mpeg", // Default to mp3
+    }
+}
+
+/// Transcribe audio from a file path
+/// Supports: mp3, wav, m4a, ogg, flac, webm
+pub async fn transcribe_file(api_key: &str, file_path: &Path, language: &str) -> Result<String, String> {
+    // Get file name and extension for mime type (before reading file)
+    let file_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio.mp3")
+        .to_string();
+
+    let extension = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp3")
+        .to_lowercase();
+
+    let mime_type = get_mime_type(&extension);
+
+    println!("[Transcribe] MIME type: {}, File name: {}", mime_type, file_name);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    // Retry logic - read file lazily in each attempt to avoid holding large data in memory
+    // and to avoid cloning large buffers on retry
+    let mut last_error = String::new();
+    for attempt in 1..=MAX_RETRIES {
+        println!("[Transcribe] Attempt {}/{} - Reading file: {:?}", attempt, MAX_RETRIES, file_path);
+
+        // Read file fresh for each attempt (avoids cloning large buffers)
+        // The OS file cache ensures this is efficient on retries
+        let file_data = std::fs::read(file_path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        if file_data.is_empty() {
+            println!("[Transcribe] File is empty");
+            return Ok(String::new());
+        }
+
+        if attempt == 1 {
+            let file_size_mb = file_data.len() as f64 / (1024.0 * 1024.0);
+            println!("[Transcribe] File size: {:.2} MB", file_size_mb);
+        }
+
+        println!("[Transcribe] Sending to Groq API...");
+
+        let part = Part::bytes(file_data)
+            .file_name(file_name.clone())
+            .mime_str(mime_type)
+            .map_err(|e| e.to_string())?;
+
+        let mut form = Form::new()
+            .part("file", part)
+            .text("model", "whisper-large-v3-turbo")
+            .text("response_format", "json");
+
+        // Only include language if not auto-detect
+        if !language.is_empty() && language != "auto" {
+            form = form.text("language", language.to_string());
+        }
+
+        match client
+            .post("https://api.groq.com/openai/v1/audio/transcriptions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .multipart(form)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if response.status().is_success() {
+                    println!("[Transcribe] Request successful!");
+                    let result: GroqResponse = response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse response: {}", e))?;
+                    return Ok(result.text);
+                } else {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    last_error = format!("Groq API error {}: {}", status, body);
+                    println!("[Transcribe] API error: {}", last_error);
+                }
+            }
+            Err(e) => {
+                last_error = format!("Request failed: {}", e);
+                println!("[Transcribe] Request error: {}", last_error);
+            }
+        }
+
+        // Wait before retry (exponential backoff)
+        if attempt < MAX_RETRIES {
+            let wait_secs = 2u64.pow(attempt);
+            println!("[Transcribe] Waiting {}s before retry...", wait_secs);
+            tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+        }
+    }
+
+    Err(last_error)
 }
