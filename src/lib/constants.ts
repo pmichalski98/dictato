@@ -16,21 +16,8 @@ export const SIDEBAR = {
   WIDTH_COLLAPSED: "w-14",
 } as const;
 
-/**
- * Store keys for Tauri plugin-store
- */
-export const STORE_KEYS = {
-  SIDEBAR_COLLAPSED: "sidebarCollapsed",
-  GROQ_API_KEY: "groqApiKey",
-  LANGUAGE: "language",
-  SHORTCUT: "shortcut",
-  CANCEL_SHORTCUT: "cancelShortcut",
-  MICROPHONE_DEVICE_ID: "microphoneDeviceId",
-  AUTO_PASTE: "autoPaste",
-  TRANSCRIPTION_RULES: "transcriptionRules",
-  CUSTOM_MODES: "customModes",
-  ACTIVE_MODE: "activeMode",
-} as const;
+// Re-export STORE_KEYS from the single source of truth
+export { STORE_KEYS } from "./storeKeys";
 
 /**
  * Delay for status message reset (e.g., "Saved" -> "Save")
