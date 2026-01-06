@@ -1,6 +1,7 @@
 mod audio;
 mod groq;
 mod llm;
+mod transcribe;
 
 use audio::{AudioCaptureHandle, AudioDevice};
 #[cfg(not(target_os = "macos"))]
@@ -646,6 +647,233 @@ async fn generate_mode_prompt(app: AppHandle, name: String, description: String)
     llm::generate_mode_prompt(&api_key, &name, &description).await
 }
 
+// ============== Transcribe commands ==============
+
+/// Progress stages for transcription
+mod progress_stages {
+    pub const PREPARING: &str = "preparing";
+    pub const EXTRACTING: &str = "extracting";
+    pub const SPLITTING: &str = "splitting";
+    pub const TRANSCRIBING: &str = "transcribing";
+    pub const DOWNLOADING: &str = "downloading";
+    pub const PROCESSING: &str = "processing";
+    pub const COMPLETE: &str = "complete";
+}
+
+/// Progress percentages for transcription stages
+mod progress_percent {
+    pub const PREPARING: u32 = 0;
+    pub const EXTRACTING: u32 = 10;
+    pub const SPLITTING: u32 = 20;
+    pub const TRANSCRIBE_START: u32 = 30;
+    pub const TRANSCRIBE_SINGLE: u32 = 50;
+    pub const PROCESSING: u32 = 85;
+    pub const COMPLETE: u32 = 100;
+    pub const YOUTUBE_START: u32 = 5;
+    pub const YOUTUBE_DOWNLOAD_COMPLETE: u32 = 40;
+}
+
+/// Helper function to emit transcription progress events
+fn emit_transcribe_progress(app: &AppHandle, stage: &str, percent: u32, message: &str) {
+    app.emit("transcribe-progress", serde_json::json!({
+        "stage": stage,
+        "percent": percent,
+        "message": message
+    })).ok();
+}
+
+#[tauri::command]
+fn check_transcribe_dependencies() -> transcribe::DependencyStatus {
+    transcribe::check_dependencies()
+}
+
+#[tauri::command]
+async fn transcribe_file(
+    app: AppHandle,
+    file_path: String,
+    language: String,
+    mode_id: Option<String>,
+    apply_rules: bool,
+) -> Result<transcribe::TranscriptionResult, String> {
+    use std::path::Path;
+
+    let path = Path::new(&file_path);
+
+    // Validate file exists
+    if !path.exists() {
+        return Err("File not found".to_string());
+    }
+
+    // Validate format
+    if !transcribe::is_supported_format(path) {
+        return Err("Unsupported file format. Supported: MP3, WAV, M4A, OGG, FLAC, MP4, MOV, WebM".to_string());
+    }
+
+    let groq_api_key = get_groq_api_key_from_store(&app)
+        .ok_or("Groq API key required. Add it in Settings.")?;
+    let openai_api_key = get_openai_api_key_from_store(&app);
+
+    emit_transcribe_progress(&app, progress_stages::PREPARING, progress_percent::PREPARING, "Preparing file...");
+
+    // Create temp dir for processing
+    let temp_dir = transcribe::create_temp_dir()?;
+    let temp_path = temp_dir.path();
+
+    // Get audio file path (extract from video if needed)
+    let audio_path = if transcribe::is_supported_video(path) {
+        emit_transcribe_progress(&app, progress_stages::EXTRACTING, progress_percent::EXTRACTING, "Extracting audio from video...");
+
+        transcribe::extract_audio_from_video(path, temp_path)?
+    } else {
+        path.to_path_buf()
+    };
+
+    // Get duration for stats
+    let duration = transcribe::get_audio_duration(&audio_path).unwrap_or(0.0);
+
+    // Check if file needs chunking
+    let raw_text = if transcribe::needs_chunking(&audio_path)? {
+        emit_transcribe_progress(&app, progress_stages::SPLITTING, progress_percent::SPLITTING, "Splitting large file...");
+
+        // Split into chunks using the constant from transcribe module
+        let chunks = transcribe::split_audio_file(&audio_path, temp_path, transcribe::CHUNK_DURATION_SECONDS)?;
+        let total_chunks = chunks.len();
+        let mut transcripts = Vec::new();
+
+        for (i, chunk_path) in chunks.iter().enumerate() {
+            let progress = progress_percent::TRANSCRIBE_START + ((i as f32 / total_chunks as f32) * 50.0) as u32;
+            emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress, "Transcribing audio...");
+
+            let chunk_text = groq::transcribe_file(&groq_api_key, chunk_path, &language).await?;
+            transcripts.push(chunk_text);
+        }
+
+        transcripts.join(" ")
+    } else {
+        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing audio...");
+
+        groq::transcribe_file(&groq_api_key, &audio_path, &language).await?
+    };
+
+    // Apply mode or rules if requested
+    let processed_text = if !raw_text.is_empty() {
+        if let Some(ref mode) = mode_id {
+            if let Some(prompt) = get_mode_prompt_from_store(&app, mode) {
+                if let Some(ref openai_key) = openai_api_key {
+                    emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying mode...");
+
+                    match llm::process_with_prompt(openai_key, &raw_text, &prompt).await {
+                        Ok(processed) => Some(processed),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if apply_rules {
+            let rules = get_transcription_rules_from_store(&app);
+            let has_enabled_rules = rules.iter().any(|r| r.enabled);
+            if has_enabled_rules {
+                if let Some(ref openai_key) = openai_api_key {
+                    emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying rules...");
+
+                    match llm::process_with_rules(openai_key, &raw_text, rules).await {
+                        Ok(processed) => Some(processed),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    emit_transcribe_progress(&app, progress_stages::COMPLETE, progress_percent::COMPLETE, "Complete!");
+
+    let final_text = processed_text.as_ref().unwrap_or(&raw_text);
+    let word_count = final_text.split_whitespace().count();
+
+    Ok(transcribe::TranscriptionResult {
+        raw_text,
+        processed_text,
+        duration_seconds: duration,
+        word_count,
+    })
+}
+
+#[tauri::command]
+async fn transcribe_youtube(
+    app: AppHandle,
+    url: String,
+    language: String,
+    mode_id: Option<String>,
+    apply_rules: bool,
+) -> Result<transcribe::TranscriptionResult, String> {
+    println!("[YouTube] Starting transcription for: {}", url);
+
+    // Validate URL
+    if !transcribe::is_valid_youtube_url(&url) {
+        println!("[YouTube] Invalid URL: {}", url);
+        return Err("Invalid YouTube URL".to_string());
+    }
+
+    // Check dependencies
+    println!("[YouTube] Checking dependencies...");
+    let deps = transcribe::check_dependencies();
+    if !deps.yt_dlp_installed {
+        println!("[YouTube] yt-dlp not found!");
+        return Err("yt-dlp is not installed. Please install it to use YouTube transcription.".to_string());
+    }
+    if !deps.ffmpeg_installed {
+        println!("[YouTube] ffmpeg not found!");
+        return Err("ffmpeg is not installed. Please install it to use YouTube transcription.".to_string());
+    }
+    println!("[YouTube] Dependencies OK: yt-dlp={:?}, ffmpeg={:?}", deps.yt_dlp_version, deps.ffmpeg_version);
+
+    // Validate API key exists (will be used by transcribe_file)
+    get_groq_api_key_from_store(&app)
+        .ok_or("Groq API key required. Add it in Settings.")?;
+
+    emit_transcribe_progress(&app, progress_stages::DOWNLOADING, progress_percent::YOUTUBE_START, "Starting YouTube download...");
+
+    // Create temp dir for processing
+    println!("[YouTube] Creating temp directory...");
+    let temp_dir = transcribe::create_temp_dir()?;
+    let temp_path = temp_dir.path().to_path_buf();
+    println!("[YouTube] Temp dir: {:?}", temp_path);
+
+    // Download audio with progress callback
+    let app_clone = app.clone();
+    let progress_callback: transcribe::ProgressCallback = Box::new(move |percent, _message| {
+        // Scale download progress from YOUTUBE_START to YOUTUBE_DOWNLOAD_COMPLETE
+        let scaled_percent = progress_percent::YOUTUBE_START as f32 + (percent * 0.35);
+        emit_transcribe_progress(
+            &app_clone,
+            progress_stages::DOWNLOADING,
+            scaled_percent as u32,
+            &format!("Downloading: {:.0}%", percent)
+        );
+    });
+
+    println!("[YouTube] Starting download...");
+    let audio_path = transcribe::download_youtube_audio_with_progress(&url, &temp_path, Some(progress_callback))?;
+    println!("[YouTube] Download complete: {:?}", audio_path);
+
+    emit_transcribe_progress(&app, progress_stages::DOWNLOADING, progress_percent::YOUTUBE_DOWNLOAD_COMPLETE, "Download complete, preparing for transcription...");
+
+    // Now process like a regular file
+    let file_path = audio_path.to_string_lossy().to_string();
+    transcribe_file(app, file_path, language, mode_id, apply_rules).await
+}
+
 fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window("floating").is_some() {
         return Ok(());
@@ -784,6 +1012,8 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
         .invoke_handler(tauri::generate_handler![
@@ -798,6 +1028,9 @@ pub fn run() {
             list_audio_devices,
             save_floating_position,
             generate_mode_prompt,
+            check_transcribe_dependencies,
+            transcribe_file,
+            transcribe_youtube,
         ])
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;

@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { TranscriptionRule } from "@/hooks/useSettings";
+import { ICON_SIZES } from "@/lib/constants";
 
 interface AddRuleDialogProps {
   isOpen: boolean;
@@ -57,12 +58,14 @@ export function AddRuleDialog({
           <h2 className="text-[15px] font-semibold text-foreground">
             {editingRule ? "Edit Rule" : "Add Custom Rule"}
           </h2>
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/30"
+            className="h-7 w-7"
           >
-            <X className="h-4 w-4" />
-          </button>
+            <X size={ICON_SIZES.sm} />
+          </Button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">

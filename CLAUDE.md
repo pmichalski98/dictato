@@ -21,10 +21,12 @@ bun run build     # TypeScript + Vite build
 Tauri v2 desktop app: React/TypeScript frontend + Rust backend. Uses OpenAI Realtime API for voice transcription.
 
 **Two windows:**
+
 - Main window: Settings UI (`Settings.tsx`) for API key, shortcut config
 - Floating window: Always-on-top transcription orb (`FloatingWindow.tsx`), routes via `?window=floating`
 
 **Core flow:**
+
 1. Global shortcut triggers recording toggle
 2. Rust opens WebSocket to OpenAI Realtime API (`realtime.rs`)
 3. Frontend captures mic via AudioWorklet, sends 24kHz PCM16 chunks to Rust
@@ -32,6 +34,7 @@ Tauri v2 desktop app: React/TypeScript frontend + Rust backend. Uses OpenAI Real
 5. On stop: transcript copied to clipboard and auto-pasted via `enigo`
 
 **Key files:**
+
 - `src-tauri/src/lib.rs` - Tauri commands, window management, shortcut handling
 - `src-tauri/src/realtime.rs` - OpenAI WebSocket session, audio streaming
 - `src/hooks/useSettings.ts` - Settings persistence via `@tauri-apps/plugin-store`
@@ -41,7 +44,24 @@ Tauri v2 desktop app: React/TypeScript frontend + Rust backend. Uses OpenAI Real
 
 ## UI Components
 
-This project uses **shadcn/ui** for UI components. Always prefer using shadcn components over creating custom ones from scratch:
+This project uses **shadcn/ui** for UI components. **Always use shadcn components instead of raw HTML elements:**
+
+### Mandatory Rules:
+
+- **NEVER use raw `<button>` elements** - always use `<Button>` from `@/components/ui/button`
+- **NEVER use raw `<input>` elements** - always use `<Input>` from `@/components/ui/input`
+- **NEVER use raw `<select>` elements** - always use `<Select>` from `@/components/ui/select`
+- Use `AlertDialog` for confirmation dialogs (delete, clear, destructive actions)
+- Use `Dialog` for forms and modal content
+
+### Button Guidelines:
+
+- Use `variant="ghost"` + `size="icon"` for icon-only buttons (edit, delete, close)
+- Use `variant="destructive"` for delete/remove actions in dialogs
+- Destructive buttons should use: `className="bg-destructive text-destructive-foreground hover:bg-destructive/90"`
+- Use `ICON_SIZES` constants from `@/lib/constants` for consistent icon sizing
+
+### Adding Components:
 
 - Check `src/components/ui/` for existing components
 - Add new shadcn components via: `bunx shadcn@latest add <component-name>`

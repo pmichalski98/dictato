@@ -209,20 +209,24 @@ export function RulesSection({
                 )}
               </div>
               <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => handleEditMode(mode)}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors"
+                  className="h-7 w-7"
                   title="Edit mode"
                 >
-                  <Pencil size={14} />
-                </button>
-                <button
+                  <Pencil size={ICON_SIZES.sm} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setModeToDelete(mode)}
-                  className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                  className="h-7 w-7 hover:bg-destructive/10 hover:text-destructive"
                   title="Delete mode"
                 >
-                  <Trash2 size={14} />
-                </button>
+                  <Trash2 size={ICON_SIZES.sm} />
+                </Button>
               </div>
             </div>
           ))}
@@ -310,7 +314,7 @@ export function RulesSection({
                   handleDeleteMode(modeToDelete);
                 }
               }}
-              className="bg-red-600 text-white hover:bg-red-700"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
             </AlertDialogAction>

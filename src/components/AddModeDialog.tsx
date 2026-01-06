@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -15,7 +16,6 @@ import {
 import { TranscriptionMode } from "@/hooks/useSettings";
 import { IconPicker, ModeIcon, type IconName } from "./IconPicker";
 import { generateModePrompt } from "@/lib/promptGenerator";
-import { Loader2 } from "lucide-react";
 
 interface AddModeDialogProps {
   isOpen: boolean;
@@ -150,17 +150,19 @@ export function AddModeDialog({
             {/* Icon picker */}
             <div>
               <Label className="text-[11px]">Icon</Label>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="icon"
                 onClick={() => setShowIconPicker(!showIconPicker)}
-                className="mt-1.5 w-8 h-8 flex items-center justify-center border border-border rounded-md bg-input hover:bg-muted/50 transition-colors"
+                className="mt-1.5 h-8 w-8"
               >
                 {icon ? (
                   <ModeIcon icon={icon} size={14} />
                 ) : (
                   <span className="text-muted-foreground text-xs">+</span>
                 )}
-              </button>
+              </Button>
             </div>
 
             {/* Name */}
@@ -184,13 +186,15 @@ export function AddModeDialog({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <Label className="text-[11px]">Select Icon</Label>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setShowIconPicker(false)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                  className="h-6 text-[10px]"
                 >
                   Close
-                </button>
+                </Button>
               </div>
               <IconPicker
                 value={icon}
