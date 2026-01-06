@@ -19,8 +19,8 @@ const navigationItems: NavigationItem[] = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "recording", label: "Recording", icon: Mic },
   { id: "rules", label: "Rules & Modes", icon: Sparkles },
-  { id: "dictionary", label: "Dictionary", icon: BookText, disabled: true },
-  { id: "history", label: "History", icon: Clock, disabled: true },
+  { id: "dictionary", label: "Dictionary", icon: BookText },
+  { id: "history", label: "History", icon: Clock },
 ];
 
 interface SidebarProps {
