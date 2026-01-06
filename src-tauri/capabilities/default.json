@@ -17,6 +17,9 @@
     "store:allow-save",
     "store:allow-load",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "dialog:allow-save",
+    "dialog:default",
+    "fs:allow-write-text-file"
   ]
 }

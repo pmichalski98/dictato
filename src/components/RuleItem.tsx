@@ -1,6 +1,8 @@
 import { Pencil, Trash2 } from "lucide-react";
 import { Switch } from "./ui/switch";
+import { Button } from "./ui/button";
 import { TranscriptionRule } from "@/hooks/useSettings";
+import { ICON_SIZES } from "@/lib/constants";
 
 interface RuleItemProps {
   rule: TranscriptionRule;
@@ -17,27 +19,33 @@ export function RuleItem({ rule, onToggle, onEdit, onDelete }: RuleItemProps) {
         onCheckedChange={() => onToggle(rule.id)}
       />
       <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-medium text-foreground">{rule.title}</div>
+        <div className="text-[13px] font-medium text-foreground">
+          {rule.title}
+        </div>
         <div className="text-[11px] text-muted-foreground truncate">
           {rule.description}
         </div>
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={() => onEdit(rule.id)}
-          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/30"
+          className="h-7 w-7"
           title="Edit rule"
         >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
+          <Pencil size={ICON_SIZES.sm} />
+        </Button>
         {!rule.isBuiltIn && (
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => onDelete(rule.id)}
-            className="p-1.5 text-muted-foreground hover:text-destructive transition-colors rounded-md hover:bg-destructive/10"
+            className="h-7 w-7 hover:bg-destructive/10 hover:text-destructive"
             title="Delete rule"
           >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+            <Trash2 size={ICON_SIZES.sm} />
+          </Button>
         )}
       </div>
     </div>
