@@ -2,8 +2,28 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
+
+// OpenAI
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const DEFAULT_MODEL: &str = "gpt-4.1-mini";
+const OPENAI_MODEL: &str = "gpt-4.1-mini";
+
+// Google Gemini
+const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+
+// Anthropic
+const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_MODEL: &str = "claude-3-5-haiku-latest";
+const ANTHROPIC_VERSION: &str = "2023-06-01"; // API protocol version
+
+/// LLM provider for text processing
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmProvider {
+    #[default]
+    OpenAI,
+    Google,
+    Anthropic,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranscriptionRule {
@@ -44,14 +64,87 @@ struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
 
-/// Shared function to make OpenAI chat API calls
+// ===== Google Gemini Structures =====
+
+#[derive(Serialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct GeminiContentItem {
+    role: String,
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Serialize)]
+struct GeminiGenerationConfig {
+    temperature: f32,
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct GeminiRequest {
+    contents: Vec<GeminiContentItem>,
+    #[serde(rename = "generationConfig")]
+    generation_config: GeminiGenerationConfig,
+}
+
+#[derive(Deserialize)]
+struct GeminiPartResponse {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct GeminiContentResponse {
+    parts: Vec<GeminiPartResponse>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: GeminiContentResponse,
+}
+
+#[derive(Deserialize)]
+struct GeminiResponse {
+    candidates: Vec<GeminiCandidate>,
+}
+
+// ===== Anthropic Structures =====
+
+#[derive(Serialize)]
+struct AnthropicMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct AnthropicRequest {
+    model: String,
+    max_tokens: u32,
+    system: String,
+    messages: Vec<AnthropicMessage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContent {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContent>,
+}
+
+/// Call OpenAI chat API
 async fn call_openai_chat(
     api_key: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
     let request = ChatRequest {
-        model: DEFAULT_MODEL.to_string(),
+        model: OPENAI_MODEL.to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -98,8 +191,131 @@ async fn call_openai_chat(
         .ok_or_else(|| "No response from LLM".to_string())
 }
 
+/// Call Google Gemini API
+async fn call_google_chat(
+    api_key: &str,
+    system_prompt: &str,
+    user_content: &str,
+) -> Result<String, String> {
+    // Gemini combines system prompt with user message
+    let contents = vec![GeminiContentItem {
+        role: "user".to_string(),
+        parts: vec![GeminiPart {
+            text: format!(
+                "{}\n\nNow process this text:\n{}",
+                system_prompt, user_content
+            ),
+        }],
+    }];
+
+    let request = GeminiRequest {
+        contents,
+        generation_config: GeminiGenerationConfig {
+            temperature: 0.3,
+            max_output_tokens: 4096,
+        },
+    };
+
+    let url = format!("{}?key={}", GOOGLE_API_URL, api_key);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(LLM_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Gemini API error {}: {}", status, body));
+    }
+
+    let result: GeminiResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+    result
+        .candidates
+        .first()
+        .and_then(|c| c.content.parts.first())
+        .map(|p| p.text.trim().to_string())
+        .ok_or_else(|| "No response from Gemini".to_string())
+}
+
+/// Call Anthropic Claude API
+async fn call_anthropic_chat(
+    api_key: &str,
+    system_prompt: &str,
+    user_content: &str,
+) -> Result<String, String> {
+    let request = AnthropicRequest {
+        model: ANTHROPIC_MODEL.to_string(),
+        max_tokens: 4096,
+        system: system_prompt.to_string(),
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: user_content.to_string(),
+        }],
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(LLM_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .post(ANTHROPIC_API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Anthropic request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Anthropic API error {}: {}", status, body));
+    }
+
+    let result: AnthropicResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Anthropic response: {}", e))?;
+
+    result
+        .content
+        .first()
+        .map(|c| c.text.trim().to_string())
+        .ok_or_else(|| "No response from Anthropic".to_string())
+}
+
+/// Unified function to call any LLM provider
+pub async fn call_llm_chat(
+    provider: &LlmProvider,
+    api_key: &str,
+    system_prompt: &str,
+    user_content: &str,
+) -> Result<String, String> {
+    match provider {
+        LlmProvider::OpenAI => call_openai_chat(api_key, system_prompt, user_content).await,
+        LlmProvider::Google => call_google_chat(api_key, system_prompt, user_content).await,
+        LlmProvider::Anthropic => call_anthropic_chat(api_key, system_prompt, user_content).await,
+    }
+}
+
 /// Process transcript with transcription rules
 pub async fn process_with_rules(
+    provider: &LlmProvider,
     api_key: &str,
     transcript: &str,
     rules: Vec<TranscriptionRule>,
@@ -135,11 +351,12 @@ Output ONLY the formatted text with no explanations."#,
         rules_text
     );
 
-    call_openai_chat(api_key, &system_prompt, transcript).await
+    call_llm_chat(provider, api_key, &system_prompt, transcript).await
 }
 
 /// Process transcript with a custom system prompt
 pub async fn process_with_prompt(
+    provider: &LlmProvider,
     api_key: &str,
     transcript: &str,
     prompt: &str,
@@ -148,7 +365,7 @@ pub async fn process_with_prompt(
         return Ok(transcript.to_string());
     }
 
-    call_openai_chat(api_key, prompt, transcript).await
+    call_llm_chat(provider, api_key, prompt, transcript).await
 }
 
 /// System prompt for the meta-prompt generator
@@ -174,6 +391,7 @@ Generate the system prompt now:"#;
 /// Generate a mode prompt using the meta-prompt approach.
 /// Takes the mode name and description, constructs the full prompt, and calls the LLM.
 pub async fn generate_mode_prompt(
+    provider: &LlmProvider,
     api_key: &str,
     name: &str,
     description: &str,
@@ -182,5 +400,152 @@ pub async fn generate_mode_prompt(
         .replace("{name}", name)
         .replace("{description}", description);
 
-    call_openai_chat(api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
+    call_llm_chat(provider, api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
+}
+
+// ===== API Key Validation =====
+
+const VALIDATION_TIMEOUT_SECS: u64 = 15;
+
+/// Validate an OpenAI API key by making a minimal request
+pub async fn validate_openai_key(api_key: &str) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Err("API key is empty".to_string());
+    }
+
+    let request = ChatRequest {
+        model: OPENAI_MODEL.to_string(),
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hi".to_string(),
+        }],
+        temperature: 0.0,
+        max_tokens: 1,
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .post(OPENAI_API_URL)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status.as_u16() == 401 {
+            return Err("Invalid API key".to_string());
+        }
+        if status.as_u16() == 429 {
+            // Rate limited but key is valid
+            return Ok(());
+        }
+        return Err(format!("API error {}: {}", status, body));
+    }
+
+    Ok(())
+}
+
+/// Validate a Google API key by making a minimal request
+pub async fn validate_google_key(api_key: &str) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Err("API key is empty".to_string());
+    }
+
+    let request = GeminiRequest {
+        contents: vec![GeminiContentItem {
+            role: "user".to_string(),
+            parts: vec![GeminiPart {
+                text: "Hi".to_string(),
+            }],
+        }],
+        generation_config: GeminiGenerationConfig {
+            temperature: 0.0,
+            max_output_tokens: 1,
+        },
+    };
+
+    let url = format!("{}?key={}", GOOGLE_API_URL, api_key);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if body.contains("API_KEY_INVALID") || status.as_u16() == 400 {
+            return Err("Invalid API key".to_string());
+        }
+        if status.as_u16() == 429 || body.contains("RESOURCE_EXHAUSTED") {
+            // Quota exceeded - key format is valid but billing issue
+            return Err("API quota exceeded. Check your billing.".to_string());
+        }
+        return Err(format!("API error {}: {}", status, body));
+    }
+
+    Ok(())
+}
+
+/// Validate an Anthropic API key by making a minimal request
+pub async fn validate_anthropic_key(api_key: &str) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Err("API key is empty".to_string());
+    }
+
+    let request = AnthropicRequest {
+        model: ANTHROPIC_MODEL.to_string(),
+        max_tokens: 1,
+        system: "Be brief.".to_string(),
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: "Hi".to_string(),
+        }],
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let response = client
+        .post(ANTHROPIC_API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status.as_u16() == 401 {
+            return Err("Invalid API key".to_string());
+        }
+        if status.as_u16() == 429 {
+            // Rate limited but key is valid
+            return Ok(());
+        }
+        return Err(format!("API error {}: {}", status, body));
+    }
+
+    Ok(())
 }
