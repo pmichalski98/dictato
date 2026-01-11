@@ -14,12 +14,19 @@ interface SettingsProps {
   onOpenUpdateDialog?: () => void;
 }
 
-export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: SettingsProps) {
+export function Settings({
+  updateAvailable,
+  newVersion,
+  onOpenUpdateDialog,
+}: SettingsProps) {
   const {
     settings,
     isLoading: isSettingsLoading,
     updateGroqApiKey,
     updateOpenaiApiKey,
+    updateGoogleApiKey,
+    updateAnthropicApiKey,
+    updateLlmProvider,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,
@@ -66,8 +73,14 @@ export function Settings({ updateAvailable, newVersion, onOpenUpdateDialog }: Se
         <GeneralSection
           groqApiKey={settings.groqApiKey}
           openaiApiKey={settings.openaiApiKey}
+          googleApiKey={settings.googleApiKey}
+          anthropicApiKey={settings.anthropicApiKey}
+          llmProvider={settings.llmProvider}
           onSaveGroqApiKey={updateGroqApiKey}
           onSaveOpenaiApiKey={updateOpenaiApiKey}
+          onSaveGoogleApiKey={updateGoogleApiKey}
+          onSaveAnthropicApiKey={updateAnthropicApiKey}
+          onUpdateLlmProvider={updateLlmProvider}
         />
       </div>
 

@@ -8,6 +8,27 @@ import type { IconName } from "@/components/IconPicker";
 // Re-export DEFAULT_MODES for components that need it
 export { DEFAULT_MODES };
 
+// LLM Provider types
+export type LlmProvider = "openai" | "google" | "anthropic";
+
+export const LLM_PROVIDERS = {
+  openai: {
+    id: "openai" as const,
+    name: "OpenAI",
+    model: "GPT-4.1 Mini",
+  },
+  google: {
+    id: "google" as const,
+    name: "Google",
+    model: "Gemini 2.0 Flash",
+  },
+  anthropic: {
+    id: "anthropic" as const,
+    name: "Anthropic",
+    model: "Claude 3.5 Haiku",
+  },
+} as const;
+
 export interface TranscriptionRule {
   id: string;
   title: string;
@@ -31,6 +52,9 @@ export interface TranscriptionMode {
 interface Settings {
   groqApiKey: string;
   openaiApiKey: string;
+  googleApiKey: string;
+  anthropicApiKey: string;
+  llmProvider: LlmProvider;
   language: string;
   shortcut: string;
   cancelShortcut: string;
@@ -83,6 +107,9 @@ const DEFAULT_RULES: TranscriptionRule[] = [
 const DEFAULT_SETTINGS: Settings = {
   groqApiKey: "",
   openaiApiKey: "",
+  googleApiKey: "",
+  anthropicApiKey: "",
+  llmProvider: "openai",
   language: "en",
   shortcut: "CommandOrControl+Shift+Space",
   cancelShortcut: "Escape",
@@ -105,6 +132,9 @@ export function useSettings() {
       try {
         const groqApiKey = await store.get<string>(STORE_KEYS.GROQ_API_KEY);
         const openaiApiKey = await store.get<string>(STORE_KEYS.OPENAI_API_KEY);
+        const googleApiKey = await store.get<string>(STORE_KEYS.GOOGLE_API_KEY);
+        const anthropicApiKey = await store.get<string>(STORE_KEYS.ANTHROPIC_API_KEY);
+        const llmProvider = await store.get<string>(STORE_KEYS.LLM_PROVIDER);
         const language = await store.get<string>(STORE_KEYS.LANGUAGE);
         const shortcut = await store.get<string>(STORE_KEYS.SHORTCUT);
         const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
@@ -145,6 +175,9 @@ export function useSettings() {
         setSettings({
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
           openaiApiKey: openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
+          googleApiKey: googleApiKey ?? DEFAULT_SETTINGS.googleApiKey,
+          anthropicApiKey: anthropicApiKey ?? DEFAULT_SETTINGS.anthropicApiKey,
+          llmProvider: (llmProvider as LlmProvider) ?? DEFAULT_SETTINGS.llmProvider,
           language: language ?? DEFAULT_SETTINGS.language,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
@@ -198,6 +231,33 @@ export function useSettings() {
       setSettings((prev) => ({ ...prev, openaiApiKey }));
     } catch (err) {
       console.error("Failed to save OpenAI API key:", err);
+    }
+  }, []);
+
+  const updateGoogleApiKey = useCallback(async (googleApiKey: string) => {
+    try {
+      await store.set(STORE_KEYS.GOOGLE_API_KEY, googleApiKey);
+      setSettings((prev) => ({ ...prev, googleApiKey }));
+    } catch (err) {
+      console.error("Failed to save Google API key:", err);
+    }
+  }, []);
+
+  const updateAnthropicApiKey = useCallback(async (anthropicApiKey: string) => {
+    try {
+      await store.set(STORE_KEYS.ANTHROPIC_API_KEY, anthropicApiKey);
+      setSettings((prev) => ({ ...prev, anthropicApiKey }));
+    } catch (err) {
+      console.error("Failed to save Anthropic API key:", err);
+    }
+  }, []);
+
+  const updateLlmProvider = useCallback(async (llmProvider: LlmProvider) => {
+    try {
+      await store.set(STORE_KEYS.LLM_PROVIDER, llmProvider);
+      setSettings((prev) => ({ ...prev, llmProvider }));
+    } catch (err) {
+      console.error("Failed to save LLM provider:", err);
     }
   }, []);
 
@@ -346,6 +406,9 @@ export function useSettings() {
     isLoading,
     updateGroqApiKey,
     updateOpenaiApiKey,
+    updateGoogleApiKey,
+    updateAnthropicApiKey,
+    updateLlmProvider,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,
