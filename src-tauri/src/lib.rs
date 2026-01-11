@@ -39,6 +39,9 @@ mod store_keys {
     pub const CUSTOM_MODES: &str = "customModes";
     pub const GROQ_API_KEY: &str = "groqApiKey";
     pub const OPENAI_API_KEY: &str = "openaiApiKey";
+    pub const GOOGLE_API_KEY: &str = "googleApiKey";
+    pub const ANTHROPIC_API_KEY: &str = "anthropicApiKey";
+    pub const LLM_PROVIDER: &str = "llmProvider";
     pub const LANGUAGE: &str = "language";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
     pub const AUTO_PASTE: &str = "autoPaste";
@@ -179,7 +182,8 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     groq_state.clear_buffer();
 
     let groq_api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
-    let openai_api_key = get_openai_api_key_from_store(&app);
+    let llm_provider = get_llm_provider_from_store(&app);
+    let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
     let language = get_language_from_store(&app);
     let transcript = if audio_data.is_empty() || groq_api_key.is_empty() {
         println!(
@@ -202,8 +206,9 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     };
 
     // Apply mode transformation or rules (modes take priority over rules)
-    // Uses OpenAI API for LLM operations
-    let mut had_openai_error = false;
+    // Uses the selected LLM provider for processing
+    let mut had_llm_error = false;
+    let provider_name = get_llm_provider_name(&llm_provider);
     let final_text = if !transcript.is_empty() {
         let skip_rules = should_skip_rules(&app);
         if skip_rules {
@@ -212,23 +217,25 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         } else if let Some(mode_id) = get_active_mode_from_store(&app) {
             // Mode is active - get prompt and apply transformation (rules are ignored)
             if let Some(prompt) = get_mode_prompt_from_store(&app, &mode_id) {
-                // Check for OpenAI API key
-                if let Some(ref openai_key) = openai_api_key {
+                // Check for LLM API key
+                if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying mode...").ok();
-                    match llm::process_with_prompt(openai_key, &transcript, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &transcript, &prompt).await {
                         Ok(processed) => {
-                            println!("[Dictato] Mode '{}' applied successfully", mode_id);
+                            println!("[Dictato] Mode '{}' applied successfully using {}", mode_id, provider_name);
                             processed
                         }
                         Err(e) => {
                             eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
+                            had_llm_error = true;
+                            show_error(&app, &format_llm_error(&e));
                             transcript
                         }
                     }
                 } else {
-                    // No OpenAI key - show error and return raw transcript
-                    had_openai_error = true;
-                    show_error(&app, "No OpenAI key - mode skipped. Raw transcription copied. Add key in Settings to use modes.");
+                    // No API key for selected provider - show error and return raw transcript
+                    had_llm_error = true;
+                    show_error(&app, &format!("No {} API key - mode skipped. Raw transcription copied. Add key in Settings to use modes.", provider_name));
                     transcript
                 }
             } else {
@@ -240,23 +247,25 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
-                // Check for OpenAI API key
-                if let Some(ref openai_key) = openai_api_key {
+                // Check for LLM API key
+                if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying rules...").ok();
-                    match llm::process_with_rules(openai_key, &transcript, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &transcript, rules).await {
                         Ok(processed) => {
-                            println!("[Dictato] Rules applied successfully");
+                            println!("[Dictato] Rules applied successfully using {}", provider_name);
                             processed
                         }
                         Err(e) => {
                             eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
+                            had_llm_error = true;
+                            show_error(&app, &format_llm_error(&e));
                             transcript
                         }
                     }
                 } else {
-                    // No OpenAI key - show error and return raw transcript
-                    had_openai_error = true;
-                    show_error(&app, "No OpenAI key - rules skipped. Raw transcription copied. Add key in Settings to use rules.");
+                    // No API key for selected provider - show error and return raw transcript
+                    had_llm_error = true;
+                    show_error(&app, &format!("No {} API key - rules skipped. Raw transcription copied. Add key in Settings to use rules.", provider_name));
                     transcript
                 }
             } else {
@@ -269,8 +278,8 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
 
     app.emit("processing-state", false).ok();
 
-    // Don't collapse window if there was an OpenAI error - let show_error handle it
-    if !had_openai_error {
+    // Don't collapse window if there was an LLM error - let show_error handle it
+    if !had_llm_error {
         collapse_floating_window(&app)?;
     }
 
@@ -563,6 +572,43 @@ fn get_openai_api_key_from_store(app: &AppHandle) -> Option<String> {
     get_store_string(app, store_keys::OPENAI_API_KEY)
 }
 
+fn get_google_api_key_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, store_keys::GOOGLE_API_KEY)
+}
+
+fn get_anthropic_api_key_from_store(app: &AppHandle) -> Option<String> {
+    get_store_string(app, store_keys::ANTHROPIC_API_KEY)
+}
+
+fn get_llm_provider_from_store(app: &AppHandle) -> llm::LlmProvider {
+    get_store_string(app, store_keys::LLM_PROVIDER)
+        .and_then(|s| match s.as_str() {
+            "openai" => Some(llm::LlmProvider::OpenAI),
+            "google" => Some(llm::LlmProvider::Google),
+            "anthropic" => Some(llm::LlmProvider::Anthropic),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Get the API key for the currently selected LLM provider
+fn get_llm_api_key_for_provider(app: &AppHandle, provider: &llm::LlmProvider) -> Option<String> {
+    match provider {
+        llm::LlmProvider::OpenAI => get_openai_api_key_from_store(app),
+        llm::LlmProvider::Google => get_google_api_key_from_store(app),
+        llm::LlmProvider::Anthropic => get_anthropic_api_key_from_store(app),
+    }
+}
+
+/// Get the display name for an LLM provider
+fn get_llm_provider_name(provider: &llm::LlmProvider) -> &'static str {
+    match provider {
+        llm::LlmProvider::OpenAI => "OpenAI",
+        llm::LlmProvider::Google => "Google",
+        llm::LlmProvider::Anthropic => "Anthropic",
+    }
+}
+
 fn get_language_from_store(app: &AppHandle) -> String {
     get_store_string(app, store_keys::LANGUAGE).unwrap_or_else(|| "en".to_string())
 }
@@ -642,9 +688,33 @@ fn save_floating_position(app: AppHandle, x: f64, y: f64) {
 
 #[tauri::command]
 async fn generate_mode_prompt(app: AppHandle, name: String, description: String) -> Result<String, String> {
-    let api_key = get_openai_api_key_from_store(&app)
-        .ok_or("OpenAI API key required for prompt generation. Add it in Settings.")?;
-    llm::generate_mode_prompt(&api_key, &name, &description).await
+    let provider = get_llm_provider_from_store(&app);
+    let provider_name = get_llm_provider_name(&provider);
+    let api_key = get_llm_api_key_for_provider(&app, &provider)
+        .ok_or_else(|| format!("{} API key required for prompt generation. Add it in Settings.", provider_name))?;
+    llm::generate_mode_prompt(&provider, &api_key, &name, &description).await
+}
+
+// ============== API Key Validation commands ==============
+
+#[tauri::command]
+async fn validate_groq_key(api_key: String) -> Result<(), String> {
+    groq::validate_groq_key(&api_key).await
+}
+
+#[tauri::command]
+async fn validate_openai_key(api_key: String) -> Result<(), String> {
+    llm::validate_openai_key(&api_key).await
+}
+
+#[tauri::command]
+async fn validate_google_key(api_key: String) -> Result<(), String> {
+    llm::validate_google_key(&api_key).await
+}
+
+#[tauri::command]
+async fn validate_anthropic_key(api_key: String) -> Result<(), String> {
+    llm::validate_anthropic_key(&api_key).await
 }
 
 // ============== Transcribe commands ==============
@@ -711,7 +781,8 @@ async fn transcribe_file(
 
     let groq_api_key = get_groq_api_key_from_store(&app)
         .ok_or("Groq API key required. Add it in Settings.")?;
-    let openai_api_key = get_openai_api_key_from_store(&app);
+    let llm_provider = get_llm_provider_from_store(&app);
+    let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
 
     emit_transcribe_progress(&app, progress_stages::PREPARING, progress_percent::PREPARING, "Preparing file...");
 
@@ -759,10 +830,10 @@ async fn transcribe_file(
     let processed_text = if !raw_text.is_empty() {
         if let Some(ref mode) = mode_id {
             if let Some(prompt) = get_mode_prompt_from_store(&app, mode) {
-                if let Some(ref openai_key) = openai_api_key {
+                if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying mode...");
 
-                    match llm::process_with_prompt(openai_key, &raw_text, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &raw_text, &prompt).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -776,10 +847,10 @@ async fn transcribe_file(
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
-                if let Some(ref openai_key) = openai_api_key {
+                if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying rules...");
 
-                    match llm::process_with_rules(openai_key, &raw_text, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &raw_text, rules).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -927,6 +998,28 @@ fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Format LLM API error into a user-friendly message
+fn format_llm_error(error: &str) -> String {
+    // Check for common error patterns and provide user-friendly messages
+    if error.contains("429") || error.contains("RESOURCE_EXHAUSTED") || error.contains("quota") {
+        return "API quota exceeded. Check your plan and billing.".to_string();
+    }
+    if error.contains("401") || error.contains("Unauthorized") || error.contains("invalid_api_key") {
+        return "Invalid API key. Check your key in Settings.".to_string();
+    }
+    if error.contains("403") || error.contains("Forbidden") {
+        return "API access denied. Check your API key permissions.".to_string();
+    }
+    if error.contains("timeout") || error.contains("Timeout") {
+        return "Request timed out. Try again.".to_string();
+    }
+    if error.contains("500") || error.contains("502") || error.contains("503") {
+        return "API service error. Try again later.".to_string();
+    }
+    // Default: show a generic message
+    "Processing failed. Check your API key and try again.".to_string()
+}
+
 fn show_error(app: &AppHandle, message: &str) {
     if let Some(window) = app.get_webview_window("floating") {
         window.show().ok();
@@ -1028,6 +1121,10 @@ pub fn run() {
             list_audio_devices,
             save_floating_position,
             generate_mode_prompt,
+            validate_groq_key,
+            validate_openai_key,
+            validate_google_key,
+            validate_anthropic_key,
             check_transcribe_dependencies,
             transcribe_file,
             transcribe_youtube,

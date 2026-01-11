@@ -10,6 +10,7 @@ const CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
 const REQUEST_TIMEOUT_SECS: u64 = 120; // Increased timeout for large files
 const MAX_RETRIES: u32 = 3;
+const VALIDATION_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Clone)]
 pub struct GroqState {
@@ -241,4 +242,39 @@ pub async fn transcribe_file(api_key: &str, file_path: &Path, language: &str) ->
     }
 
     Err(last_error)
+}
+
+/// Validate a Groq API key by checking the models endpoint
+pub async fn validate_groq_key(api_key: &str) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Err("API key is empty".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    // Use the models endpoint to validate the API key
+    let response = client
+        .get("https://api.groq.com/openai/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        if status.as_u16() == 401 {
+            return Err("Invalid API key".to_string());
+        }
+        if status.as_u16() == 429 {
+            // Rate limited but key is valid
+            return Ok(());
+        }
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, body));
+    }
+
+    Ok(())
 }
