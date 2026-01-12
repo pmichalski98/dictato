@@ -1,13 +1,23 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Eye, EyeOff, Loader2, Mic, Sparkles } from "lucide-react";
-import { ICON_SIZES, STATUS_RESET_DELAY_MS } from "@/lib/constants";
+import { platform } from "@tauri-apps/plugin-os";
+import {
+  Check,
+  Eye,
+  EyeOff,
+  Loader2,
+  Mic,
+  Settings2,
+  Sparkles,
+} from "lucide-react";
+import { ICON_SIZES, PLATFORMS, STATUS_RESET_DELAY_MS } from "@/lib/constants";
 import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { LLM_PROVIDERS, type LlmProvider } from "@/hooks/useSettings";
 
 type SaveStatus = "idle" | "validating" | "saved" | "error";
@@ -229,6 +239,45 @@ export function GeneralSection({
   const hasGoogleKey = !!googleApiKey;
   const hasAnthropicKey = !!anthropicApiKey;
 
+  // Autostart state (Windows only)
+  const [isWindows, setIsWindows] = useState(false);
+  const [autostart, setAutostart] = useState(false);
+  const [autostartLoading, setAutostartLoading] = useState(true);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkPlatformAndAutostart() {
+      try {
+        const currentPlatform = await platform();
+        const isWin = currentPlatform === PLATFORMS.WINDOWS;
+        setIsWindows(isWin);
+
+        if (isWin) {
+          const enabled = await invoke<boolean>("get_autostart");
+          setAutostart(enabled);
+        }
+      } catch (error) {
+        console.error("Failed to check platform/autostart:", error);
+      } finally {
+        setAutostartLoading(false);
+      }
+    }
+    checkPlatformAndAutostart();
+  }, []);
+
+  const handleAutostartChange = useCallback(async (enabled: boolean) => {
+    setAutostartError(null);
+    try {
+      await invoke("set_autostart", { enabled });
+      setAutostart(enabled);
+    } catch (error) {
+      console.error("Failed to set autostart:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      setAutostartError(message);
+      setTimeout(() => setAutostartError(null), STATUS_RESET_DELAY_MS * 2);
+    }
+  }, []);
+
   return (
     <SectionLayout
       title="General"
@@ -277,8 +326,8 @@ export function GeneralSection({
                 provider.id === "openai"
                   ? hasOpenaiKey
                   : provider.id === "google"
-                    ? hasGoogleKey
-                    : hasAnthropicKey;
+                  ? hasGoogleKey
+                  : hasAnthropicKey;
               return (
                 <option
                   key={provider.id}
@@ -337,6 +386,38 @@ export function GeneralSection({
         validateCommand="validate_anthropic_key"
         onSave={onSaveAnthropicApiKey}
       />
+
+      {/* System Settings Section (Windows only) */}
+      {isWindows && (
+        <>
+          <SectionDivider
+            icon={<Settings2 size={ICON_SIZES.sm} />}
+            title="System Settings"
+            description="Windows startup and system behavior"
+            accentColor="purple"
+          />
+
+          <Card className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label>Start with Windows</Label>
+                <p className="text-[11px] text-muted-foreground">
+                  Launch Dictato automatically when Windows starts (runs in
+                  background)
+                </p>
+              </div>
+              <Switch
+                checked={autostart}
+                onCheckedChange={handleAutostartChange}
+                disabled={autostartLoading}
+              />
+            </div>
+            {autostartError && (
+              <p className="text-[11px] text-destructive">{autostartError}</p>
+            )}
+          </Card>
+        </>
+      )}
     </SectionLayout>
   );
 }
