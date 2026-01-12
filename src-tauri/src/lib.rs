@@ -14,7 +14,9 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
-use tauri_plugin_autostart::MacosLauncher;
+// Autostart plugin only on Windows
+#[cfg(target_os = "windows")]
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
@@ -717,6 +719,40 @@ async fn validate_anthropic_key(api_key: String) -> Result<(), String> {
     llm::validate_anthropic_key(&api_key).await
 }
 
+// ============== Autostart commands (Windows only) ==============
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let autostart = app.autolaunch();
+    if enabled {
+        autostart.enable().map_err(|e| e.to_string())
+    } else {
+        autostart.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "windows"))]
+fn set_autostart(_app: AppHandle, _enabled: bool) -> Result<(), String> {
+    // No-op on non-Windows platforms
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    let autostart = app.autolaunch();
+    autostart.is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "windows"))]
+fn get_autostart(_app: AppHandle) -> Result<bool, String> {
+    // Always return false on non-Windows platforms
+    Ok(false)
+}
+
 // ============== Transcribe commands ==============
 
 /// Progress stages for transcription
@@ -1094,19 +1130,28 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
+        .plugin(tauri_plugin_store::Builder::new().build());
+
+    // Autostart plugin only on Windows
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
-        ))
+        ));
+    }
+
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_os::init())
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
         .invoke_handler(tauri::generate_handler![
@@ -1125,17 +1170,24 @@ pub fn run() {
             validate_openai_key,
             validate_google_key,
             validate_anthropic_key,
+            set_autostart,
+            get_autostart,
             check_transcribe_dependencies,
             transcribe_file,
             transcribe_youtube,
         ])
         .setup(|app| {
-            use tauri_plugin_autostart::ManagerExt;
-            let autostart = app.autolaunch();
-            let _ = autostart.enable();
-
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
+
+            // Hide main window if started with --minimized flag (from autostart)
+            let args: Vec<String> = std::env::args().collect();
+            if args.contains(&"--minimized".to_string()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.hide().ok();
+                }
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())

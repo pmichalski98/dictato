@@ -1,4 +1,13 @@
 /**
+ * Platform identifiers returned by @tauri-apps/plugin-os
+ */
+export const PLATFORMS = {
+  WINDOWS: "windows",
+  MACOS: "macos",
+  LINUX: "linux",
+} as const;
+
+/**
  * Consistent icon sizes used throughout the app
  */
 export const ICON_SIZES = {
