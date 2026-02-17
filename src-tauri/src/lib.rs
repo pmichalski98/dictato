@@ -1082,6 +1082,19 @@ fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().ok();
+        window.set_focus().ok();
+    }
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.hide().ok();
+    }
+}
+
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let icon = match app.default_window_icon() {
         Some(icon) => icon.clone(),
@@ -1104,19 +1117,12 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } = event
             {
-                let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    window.show().ok();
-                    window.set_focus().ok();
-                }
+                show_main_window(tray.app_handle());
             }
         })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.show().ok();
-                    window.set_focus().ok();
-                }
+                show_main_window(app);
             }
             "quit" => {
                 app.exit(0);
@@ -1142,7 +1148,7 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--minimized"]),
+            None,
         ));
     }
 
@@ -1180,12 +1186,10 @@ pub fn run() {
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
 
-            // Hide main window if started with --minimized flag (from autostart)
-            let args: Vec<String> = std::env::args().collect();
-            if args.contains(&"--minimized".to_string()) {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.hide().ok();
-                }
+            // Show settings window on first launch (no API key configured)
+            let has_api_key = get_groq_api_key_from_store(app.handle()).is_some();
+            if !has_api_key {
+                show_main_window(app.handle());
             }
 
             Ok(())
@@ -1200,9 +1204,7 @@ pub fn run() {
             } => {
                 if label == "main" {
                     api.prevent_close();
-                    if let Some(window) = app.get_webview_window("main") {
-                        window.hide().ok();
-                    }
+                    hide_main_window(app);
                 }
             }
             RunEvent::WindowEvent {
@@ -1227,10 +1229,7 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.show().ok();
-                    window.set_focus().ok();
-                }
+                show_main_window(app);
             }
             _ => {}
         });

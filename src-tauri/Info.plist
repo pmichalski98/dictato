@@ -6,6 +6,8 @@
     <string>Dictato needs microphone access to transcribe your voice to text.</string>
     <key>NSCameraUseContinuityCameraDeviceType</key>
     <true/>
+    <key>LSUIElement</key>
+    <true/>
 </dict>
 </plist>
 
