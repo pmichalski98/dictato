@@ -1,16 +1,20 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 import {
   Check,
+  Download,
   Eye,
   EyeOff,
+  HardDrive,
   Loader2,
   Mic,
   Settings2,
   Sparkles,
+  Trash2,
 } from "lucide-react";
-import { ICON_SIZES, PLATFORMS, STATUS_RESET_DELAY_MS } from "@/lib/constants";
+import { EVENTS, ICON_SIZES, PLATFORMS, STATUS_RESET_DELAY_MS } from "@/lib/constants";
 import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -18,7 +22,12 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { LLM_PROVIDERS, type LlmProvider } from "@/hooks/useSettings";
+import {
+  LLM_PROVIDERS,
+  STT_PROVIDERS,
+  type LlmProvider,
+  type SttProvider,
+} from "@/hooks/useSettings";
 
 type SaveStatus = "idle" | "validating" | "saved" | "error";
 
@@ -210,12 +219,224 @@ function SectionDivider({
   );
 }
 
+type ParakeetStatus =
+  | "checking"
+  | "not_downloaded"
+  | "downloading"
+  | "loading"
+  | "downloaded"
+  | "ready"
+  | "error";
+
+interface DownloadProgress {
+  bytesDownloaded?: number;
+  totalBytes?: number;
+  percent: number;
+  finishing: boolean;
+}
+
+function ParakeetModelCard() {
+  const [status, setStatus] = useState<ParakeetStatus>("checking");
+  const [downloadProgress, setDownloadProgress] =
+    useState<DownloadProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkStatus() {
+      try {
+        const result = await invoke<string>("get_parakeet_model_status");
+        setStatus(result as ParakeetStatus);
+      } catch (err) {
+        console.error("Failed to check model status:", err);
+        setStatus("error");
+        setError(String(err));
+      }
+    }
+    checkStatus();
+  }, []);
+
+  useEffect(() => {
+    const unlistenProgress = listen<DownloadProgress>(
+      EVENTS.PARAKEET_DOWNLOAD_PROGRESS,
+      (event) => {
+        setDownloadProgress(event.payload);
+      }
+    );
+    const unlistenLoading = listen<boolean>(
+      EVENTS.PARAKEET_LOADING,
+      (event) => {
+        if (event.payload) {
+          setStatus("loading");
+        } else {
+          // Refresh actual status after loading completes
+          invoke<string>("get_parakeet_model_status")
+            .then((result) => setStatus(result as ParakeetStatus))
+            .catch(() => {});
+        }
+      }
+    );
+    return () => {
+      unlistenProgress.then((fn) => fn());
+      unlistenLoading.then((fn) => fn());
+    };
+  }, []);
+
+  const handleDownload = useCallback(async () => {
+    setStatus("downloading");
+    setError(null);
+    setDownloadProgress(null);
+    try {
+      await invoke("download_parakeet_model");
+      setStatus("ready");
+    } catch (err) {
+      console.error("Failed to download model:", err);
+      setStatus("error");
+      setError(String(err));
+    }
+  }, []);
+
+  const handleDelete = useCallback(async () => {
+    setError(null);
+    try {
+      await invoke("delete_parakeet_model");
+      setStatus("not_downloaded");
+      setDownloadProgress(null);
+    } catch (err) {
+      console.error("Failed to delete model:", err);
+      setError(String(err));
+    }
+  }, []);
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <Card className="space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <HardDrive size={ICON_SIZES.sm} className="text-muted-foreground" />
+          <Label>Parakeet Model</Label>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          NVIDIA Parakeet TDT v3 (600M params, ~670 MB download). Supports 25
+          European languages.
+        </p>
+      </div>
+
+      {status === "checking" && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
+          Checking model status...
+        </div>
+      )}
+
+      {status === "not_downloaded" && (
+        <Button onClick={handleDownload} className="w-full">
+          <Download size={ICON_SIZES.sm} className="mr-1.5" />
+          Download Model (~670 MB)
+        </Button>
+      )}
+
+      {status === "downloading" && (
+        <div className="space-y-2">
+          {downloadProgress?.finishing ? (
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
+              Finishing up...
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground">
+                  Downloading model...
+                </span>
+                <span className="text-foreground font-medium">
+                  {downloadProgress
+                    ? `${downloadProgress.percent.toFixed(0)}%`
+                    : ""}
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{
+                    width: `${downloadProgress?.percent ?? 0}%`,
+                  }}
+                />
+              </div>
+              {downloadProgress?.bytesDownloaded != null &&
+                downloadProgress?.totalBytes != null &&
+                downloadProgress.totalBytes > 0 && (
+                  <p className="text-[10px] text-muted-foreground">
+                    {formatBytes(downloadProgress.bytesDownloaded)} /{" "}
+                    {formatBytes(downloadProgress.totalBytes)}
+                  </p>
+                )}
+            </>
+          )}
+        </div>
+      )}
+
+      {status === "loading" && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
+          Loading model into memory...
+        </div>
+      )}
+
+      {(status === "ready" || status === "downloaded") && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                status === "ready"
+                  ? "bg-green-500 animate-pulse"
+                  : "bg-amber-500"
+              }`}
+            />
+            <span className="text-[11px] text-muted-foreground">
+              Model{" "}
+              <span className="text-foreground font-medium">
+                {status === "ready" ? "ready" : "downloaded (not loaded)"}
+              </span>
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            className="text-[11px] text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 size={ICON_SIZES.xs} className="mr-1" />
+            Delete model
+          </Button>
+        </div>
+      )}
+
+      {error && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-destructive">{error}</p>
+          {status === "error" && (
+            <Button onClick={handleDownload} variant="default" size="sm">
+              Retry Download
+            </Button>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 interface GeneralSectionProps {
+  sttProvider: SttProvider;
   groqApiKey: string;
   openaiApiKey: string;
   googleApiKey: string;
   anthropicApiKey: string;
   llmProvider: LlmProvider;
+  onUpdateSttProvider: (provider: SttProvider) => Promise<void>;
   onSaveGroqApiKey: (key: string) => Promise<void>;
   onSaveOpenaiApiKey: (key: string) => Promise<void>;
   onSaveGoogleApiKey: (key: string) => Promise<void>;
@@ -224,11 +445,13 @@ interface GeneralSectionProps {
 }
 
 export function GeneralSection({
+  sttProvider,
   groqApiKey,
   openaiApiKey,
   googleApiKey,
   anthropicApiKey,
   llmProvider,
+  onUpdateSttProvider,
   onSaveGroqApiKey,
   onSaveOpenaiApiKey,
   onSaveGoogleApiKey,
@@ -291,16 +514,41 @@ export function GeneralSection({
         accentColor="pink"
       />
 
-      <ApiKeyCard
-        label="Groq API Key"
-        description="Powers fast voice transcription using Whisper large-v3"
-        placeholder="gsk_..."
-        linkUrl="https://console.groq.com/keys"
-        linkText="console.groq.com"
-        value={groqApiKey}
-        validateCommand="validate_groq_key"
-        onSave={onSaveGroqApiKey}
-      />
+      <Card className="space-y-3">
+        <div className="space-y-1.5">
+          <Label>Transcription Provider</Label>
+          <p className="text-[11px] text-muted-foreground">
+            Choose between cloud or local speech-to-text
+          </p>
+          <Select
+            value={sttProvider}
+            onChange={(e) =>
+              onUpdateSttProvider(e.target.value as SttProvider)
+            }
+          >
+            {Object.values(STT_PROVIDERS).map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name} — {provider.description}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </Card>
+
+      {sttProvider === "parakeet" && <ParakeetModelCard />}
+
+      {sttProvider === "groq" && (
+        <ApiKeyCard
+          label="Groq API Key"
+          description="Powers fast voice transcription using Whisper large-v3"
+          placeholder="gsk_..."
+          linkUrl="https://console.groq.com/keys"
+          linkText="console.groq.com"
+          value={groqApiKey}
+          validateCommand="validate_groq_key"
+          onSave={onSaveGroqApiKey}
+        />
+      )}
 
       {/* AI Processing Section */}
       <SectionDivider

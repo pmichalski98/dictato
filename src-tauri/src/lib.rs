@@ -1,6 +1,7 @@
 mod audio;
 mod groq;
 mod llm;
+mod parakeet;
 mod transcribe;
 
 use audio::{AudioCaptureHandle, AudioDevice};
@@ -52,6 +53,7 @@ mod store_keys {
     pub const STATS_TOTAL_WORDS: &str = "statsTotalWords";
     pub const STATS_TOTAL_TRANSCRIPTIONS: &str = "statsTotalTranscriptions";
     pub const STATS_TOTAL_TIME_SAVED_SECONDS: &str = "statsTotalTimeSavedSeconds";
+    pub const STT_PROVIDER: &str = "sttProvider";
 }
 
 // Built-in mode prompts
@@ -183,26 +185,51 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
 
     groq_state.clear_buffer();
 
-    let groq_api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
+    let stt_provider = get_stt_provider_from_store(&app);
     let llm_provider = get_llm_provider_from_store(&app);
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
     let language = get_language_from_store(&app);
-    let transcript = if audio_data.is_empty() || groq_api_key.is_empty() {
-        println!(
-            "[Dictato] Skipping transcription: audio_empty={}, groq_api_key_empty={}",
-            audio_data.is_empty(),
-            groq_api_key.is_empty()
-        );
+    let transcript = if audio_data.is_empty() {
+        println!("[Dictato] Skipping transcription: audio buffer empty");
         String::new()
-    } else {
-        println!("[Dictato] Sending {} bytes to Groq API", audio_data.len());
+    } else if stt_provider == parakeet::SttProvider::Parakeet {
+        println!("[Dictato] Transcribing {} bytes locally with Parakeet", audio_data.len());
         app.emit("processing-state", true).ok();
-        let result = groq::transcribe(&groq_api_key, audio_data, &language).await;
+        parakeet::set_transcribing(true);
+        let parakeet_state = app.state::<parakeet::ParakeetState>();
+        let state_clone = parakeet_state.inner().clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let r = parakeet::transcribe_pcm16(&state_clone, audio_data);
+            parakeet::set_transcribing(false);
+            r
+        })
+        .await
+        .map_err(|e| {
+            parakeet::set_transcribing(false);
+            format!("Transcription task failed: {}", e)
+        })?;
         match result {
             Ok(text) => text,
             Err(e) => {
                 app.emit("processing-state", false).ok();
                 return Err(e);
+            }
+        }
+    } else {
+        let groq_api_key = get_groq_api_key_from_store(&app).unwrap_or_default();
+        if groq_api_key.is_empty() {
+            println!("[Dictato] Skipping transcription: groq_api_key_empty");
+            String::new()
+        } else {
+            println!("[Dictato] Sending {} bytes to Groq API", audio_data.len());
+            app.emit("processing-state", true).ok();
+            let result = groq::transcribe(&groq_api_key, audio_data, &language).await;
+            match result {
+                Ok(text) => text,
+                Err(e) => {
+                    app.emit("processing-state", false).ok();
+                    return Err(e);
+                }
             }
         }
     };
@@ -497,14 +524,30 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                         eprintln!("Failed to stop recording: {}", e);
                     }
                 } else {
-                    let api_key = get_groq_api_key_from_store(&app);
-                    if api_key.is_some() {
+                    let stt_provider = get_stt_provider_from_store(&app);
+                    let can_record = match stt_provider {
+                        parakeet::SttProvider::Parakeet => {
+                            let parakeet_state = app.state::<parakeet::ParakeetState>();
+                            parakeet::is_model_loaded(&parakeet_state)
+                        }
+                        parakeet::SttProvider::Groq => {
+                            get_groq_api_key_from_store(&app).is_some()
+                        }
+                    };
+
+                    if can_record {
                         if let Err(e) = start_recording(app).await {
                             eprintln!("Failed to start recording: {}", e);
                         }
                     } else {
-                        // Show error to user when no API key configured
-                        show_error(&app, "No API key configured. Add your Groq API key in Settings.");
+                        match stt_provider {
+                            parakeet::SttProvider::Parakeet => {
+                                show_error(&app, "Parakeet model not loaded. Download it in Settings.");
+                            }
+                            parakeet::SttProvider::Groq => {
+                                show_error(&app, "No API key configured. Add your Groq API key in Settings.");
+                            }
+                        }
                     }
                 }
             });
@@ -609,6 +652,12 @@ fn get_llm_provider_name(provider: &llm::LlmProvider) -> &'static str {
         llm::LlmProvider::Google => "Google",
         llm::LlmProvider::Anthropic => "Anthropic",
     }
+}
+
+fn get_stt_provider_from_store(app: &AppHandle) -> parakeet::SttProvider {
+    get_store_string(app, store_keys::STT_PROVIDER)
+        .map(|s| parakeet::SttProvider::from_store_value(&s))
+        .unwrap_or(parakeet::SttProvider::Groq)
 }
 
 fn get_language_from_store(app: &AppHandle) -> String {
@@ -719,6 +768,54 @@ async fn validate_anthropic_key(api_key: String) -> Result<(), String> {
     llm::validate_anthropic_key(&api_key).await
 }
 
+// ============== Parakeet commands ==============
+
+#[tauri::command]
+async fn get_parakeet_model_status(app: AppHandle) -> Result<String, String> {
+    let model_dir = parakeet::get_model_dir(&app)?;
+    if parakeet::is_model_downloaded(&model_dir) {
+        let parakeet_state = app.state::<parakeet::ParakeetState>();
+        if parakeet::is_model_loaded(&parakeet_state) {
+            Ok("ready".to_string())
+        } else {
+            Ok("downloaded".to_string())
+        }
+    } else {
+        Ok("not_downloaded".to_string())
+    }
+}
+
+#[tauri::command]
+async fn download_parakeet_model(app: AppHandle) -> Result<(), String> {
+    parakeet::download_model(&app).await?;
+
+    // Load model after download
+    let model_dir = parakeet::get_model_dir(&app)?;
+    let parakeet_state = app.state::<parakeet::ParakeetState>();
+    let state_clone = parakeet_state.inner().clone();
+
+    tokio::task::spawn_blocking(move || parakeet::load_model(&state_clone, &model_dir))
+        .await
+        .map_err(|e| format!("Load task failed: {}", e))??;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_parakeet_model(app: AppHandle) -> Result<(), String> {
+    if IS_RECORDING.load(Ordering::SeqCst) || parakeet::is_transcribing() {
+        return Err("Cannot delete model during active recording or transcription".to_string());
+    }
+
+    let parakeet_state = app.state::<parakeet::ParakeetState>();
+    parakeet::unload_model(&parakeet_state)?;
+
+    let model_dir = parakeet::get_model_dir(&app)?;
+    parakeet::delete_model(&model_dir)?;
+
+    Ok(())
+}
+
 // ============== Autostart commands (Windows only) ==============
 
 #[tauri::command]
@@ -815,8 +912,7 @@ async fn transcribe_file(
         return Err("Unsupported file format. Supported: MP3, WAV, M4A, OGG, FLAC, MP4, MOV, WebM".to_string());
     }
 
-    let groq_api_key = get_groq_api_key_from_store(&app)
-        .ok_or("Groq API key required. Add it in Settings.")?;
+    let stt_provider = get_stt_provider_from_store(&app);
     let llm_provider = get_llm_provider_from_store(&app);
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
 
@@ -838,28 +934,51 @@ async fn transcribe_file(
     // Get duration for stats
     let duration = transcribe::get_audio_duration(&audio_path).unwrap_or(0.0);
 
-    // Check if file needs chunking
-    let raw_text = if transcribe::needs_chunking(&audio_path)? {
-        emit_transcribe_progress(&app, progress_stages::SPLITTING, progress_percent::SPLITTING, "Splitting large file...");
+    // Transcribe using the selected STT provider
+    let raw_text = if stt_provider == parakeet::SttProvider::Parakeet {
+        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing locally...");
 
-        // Split into chunks using the constant from transcribe module
-        let chunks = transcribe::split_audio_file(&audio_path, temp_path, transcribe::CHUNK_DURATION_SECONDS)?;
-        let total_chunks = chunks.len();
-        let mut transcripts = Vec::new();
+        parakeet::set_transcribing(true);
+        let parakeet_state = app.state::<parakeet::ParakeetState>();
+        let state_clone = parakeet_state.inner().clone();
+        let audio_path_clone = audio_path.clone();
 
-        for (i, chunk_path) in chunks.iter().enumerate() {
-            let progress = progress_percent::TRANSCRIBE_START + ((i as f32 / total_chunks as f32) * 50.0) as u32;
-            emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress, "Transcribing audio...");
-
-            let chunk_text = groq::transcribe_file(&groq_api_key, chunk_path, &language).await?;
-            transcripts.push(chunk_text);
-        }
-
-        transcripts.join(" ")
+        let result = tokio::task::spawn_blocking(move || {
+            let r = parakeet::transcribe_file_local(&state_clone, &audio_path_clone);
+            parakeet::set_transcribing(false);
+            r
+        })
+        .await
+        .map_err(|e| {
+            parakeet::set_transcribing(false);
+            format!("Transcription task failed: {}", e)
+        })?;
+        result?
     } else {
-        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing audio...");
+        let groq_api_key = get_groq_api_key_from_store(&app)
+            .ok_or("Groq API key required. Add it in Settings.")?;
 
-        groq::transcribe_file(&groq_api_key, &audio_path, &language).await?
+        if transcribe::needs_chunking(&audio_path)? {
+            emit_transcribe_progress(&app, progress_stages::SPLITTING, progress_percent::SPLITTING, "Splitting large file...");
+
+            let chunks = transcribe::split_audio_file(&audio_path, temp_path, transcribe::CHUNK_DURATION_SECONDS)?;
+            let total_chunks = chunks.len();
+            let mut transcripts = Vec::new();
+
+            for (i, chunk_path) in chunks.iter().enumerate() {
+                let progress = progress_percent::TRANSCRIBE_START + ((i as f32 / total_chunks as f32) * 50.0) as u32;
+                emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress, "Transcribing audio...");
+
+                let chunk_text = groq::transcribe_file(&groq_api_key, chunk_path, &language).await?;
+                transcripts.push(chunk_text);
+            }
+
+            transcripts.join(" ")
+        } else {
+            emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing audio...");
+
+            groq::transcribe_file(&groq_api_key, &audio_path, &language).await?
+        }
     };
 
     // Apply mode or rules if requested
@@ -945,9 +1064,20 @@ async fn transcribe_youtube(
     }
     println!("[YouTube] Dependencies OK: yt-dlp={:?}, ffmpeg={:?}", deps.yt_dlp_version, deps.ffmpeg_version);
 
-    // Validate API key exists (will be used by transcribe_file)
-    get_groq_api_key_from_store(&app)
-        .ok_or("Groq API key required. Add it in Settings.")?;
+    // Validate STT provider is ready
+    let stt_provider = get_stt_provider_from_store(&app);
+    match stt_provider {
+        parakeet::SttProvider::Parakeet => {
+            let parakeet_state = app.state::<parakeet::ParakeetState>();
+            if !parakeet::is_model_loaded(&parakeet_state) {
+                return Err("Parakeet model not loaded. Download it in Settings.".to_string());
+            }
+        }
+        parakeet::SttProvider::Groq => {
+            get_groq_api_key_from_store(&app)
+                .ok_or("Groq API key required. Add it in Settings.")?;
+        }
+    }
 
     emit_transcribe_progress(&app, progress_stages::DOWNLOADING, progress_percent::YOUTUBE_START, "Starting YouTube download...");
 
@@ -1160,6 +1290,7 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
+        .manage(parakeet::ParakeetState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -1181,15 +1312,54 @@ pub fn run() {
             check_transcribe_dependencies,
             transcribe_file,
             transcribe_youtube,
+            get_parakeet_model_status,
+            download_parakeet_model,
+            delete_parakeet_model,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
 
-            // Show settings window on first launch (no API key configured)
-            let has_api_key = get_groq_api_key_from_store(app.handle()).is_some();
-            if !has_api_key {
-                show_main_window(app.handle());
+            // Check STT provider and show settings if needed
+            let stt_provider = get_stt_provider_from_store(app.handle());
+            match stt_provider {
+                parakeet::SttProvider::Parakeet => {
+                    let model_dir = match parakeet::get_model_dir(app.handle()) {
+                        Ok(dir) => dir,
+                        Err(e) => {
+                            eprintln!("[Parakeet] Failed to get model dir on startup: {}", e);
+                            show_main_window(app.handle());
+                            return Ok(());
+                        }
+                    };
+                    if parakeet::is_model_downloaded(&model_dir) {
+                        // Load model in background on startup.
+                        // Uses std::thread::spawn because setup() is not async.
+                        let parakeet_state = app.state::<parakeet::ParakeetState>();
+                        let state_clone = parakeet_state.inner().clone();
+                        let app_handle = app.handle().clone();
+                        std::thread::spawn(move || {
+                            app_handle.emit(parakeet::EVENT_LOADING, true).ok();
+                            match parakeet::load_model(&state_clone, &model_dir) {
+                                Ok(_) => {
+                                    app_handle.emit(parakeet::EVENT_LOADING, false).ok();
+                                }
+                                Err(e) => {
+                                    eprintln!("[Parakeet] Failed to load model on startup: {}", e);
+                                    app_handle.emit(parakeet::EVENT_LOADING, false).ok();
+                                }
+                            }
+                        });
+                    } else {
+                        show_main_window(app.handle());
+                    }
+                }
+                parakeet::SttProvider::Groq => {
+                    let has_api_key = get_groq_api_key_from_store(app.handle()).is_some();
+                    if !has_api_key {
+                        show_main_window(app.handle());
+                    }
+                }
             }
 
             Ok(())

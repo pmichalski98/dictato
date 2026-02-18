@@ -8,6 +8,22 @@ import type { IconName } from "@/components/IconPicker";
 // Re-export DEFAULT_MODES for components that need it
 export { DEFAULT_MODES };
 
+// STT Provider types
+export type SttProvider = "groq" | "parakeet";
+
+export const STT_PROVIDERS = {
+  groq: {
+    id: "groq" as const,
+    name: "Groq Cloud",
+    description: "Fast cloud transcription via Whisper",
+  },
+  parakeet: {
+    id: "parakeet" as const,
+    name: "Parakeet Local",
+    description: "Local transcription, no API key needed",
+  },
+} as const;
+
 // LLM Provider types
 export type LlmProvider = "openai" | "google" | "anthropic";
 
@@ -50,6 +66,7 @@ export interface TranscriptionMode {
 }
 
 interface Settings {
+  sttProvider: SttProvider;
   groqApiKey: string;
   openaiApiKey: string;
   googleApiKey: string;
@@ -105,6 +122,7 @@ const DEFAULT_RULES: TranscriptionRule[] = [
 ];
 
 const DEFAULT_SETTINGS: Settings = {
+  sttProvider: "groq",
   groqApiKey: "",
   openaiApiKey: "",
   googleApiKey: "",
@@ -130,6 +148,7 @@ export function useSettings() {
   useEffect(() => {
     async function loadSettings() {
       try {
+        const sttProvider = await store.get<string>(STORE_KEYS.STT_PROVIDER);
         const groqApiKey = await store.get<string>(STORE_KEYS.GROQ_API_KEY);
         const openaiApiKey = await store.get<string>(STORE_KEYS.OPENAI_API_KEY);
         const googleApiKey = await store.get<string>(STORE_KEYS.GOOGLE_API_KEY);
@@ -173,6 +192,7 @@ export function useSettings() {
         }
 
         setSettings({
+          sttProvider: (sttProvider as SttProvider) ?? DEFAULT_SETTINGS.sttProvider,
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
           openaiApiKey: openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
           googleApiKey: googleApiKey ?? DEFAULT_SETTINGS.googleApiKey,
@@ -196,6 +216,15 @@ export function useSettings() {
     }
 
     loadSettings();
+  }, []);
+
+  const updateSttProvider = useCallback(async (sttProvider: SttProvider) => {
+    try {
+      await store.set(STORE_KEYS.STT_PROVIDER, sttProvider);
+      setSettings((prev) => ({ ...prev, sttProvider }));
+    } catch (err) {
+      console.error("Failed to save STT provider:", err);
+    }
   }, []);
 
   const updateShortcut = useCallback(async (shortcut: string) => {
@@ -404,6 +433,7 @@ export function useSettings() {
   return {
     settings,
     isLoading,
+    updateSttProvider,
     updateGroqApiKey,
     updateOpenaiApiKey,
     updateGoogleApiKey,

@@ -22,6 +22,7 @@ export function Settings({
   const {
     settings,
     isLoading: isSettingsLoading,
+    updateSttProvider,
     updateGroqApiKey,
     updateOpenaiApiKey,
     updateGoogleApiKey,
@@ -71,11 +72,13 @@ export function Settings({
     >
       <div className={activeSection === "general" ? "block" : "hidden"}>
         <GeneralSection
+          sttProvider={settings.sttProvider}
           groqApiKey={settings.groqApiKey}
           openaiApiKey={settings.openaiApiKey}
           googleApiKey={settings.googleApiKey}
           anthropicApiKey={settings.anthropicApiKey}
           llmProvider={settings.llmProvider}
+          onUpdateSttProvider={updateSttProvider}
           onSaveGroqApiKey={updateGroqApiKey}
           onSaveOpenaiApiKey={updateOpenaiApiKey}
           onSaveGoogleApiKey={updateGoogleApiKey}
