@@ -49,6 +49,8 @@ export const ALL_SUPPORTED_FORMATS = [
  */
 export const EVENTS = {
   TRANSCRIBE_PROGRESS: "transcribe-progress",
+  PARAKEET_DOWNLOAD_PROGRESS: "parakeet-download-progress",
+  PARAKEET_LOADING: "parakeet-loading",
 } as const;
 
 /**
