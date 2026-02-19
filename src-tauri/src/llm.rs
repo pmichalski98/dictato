@@ -12,7 +12,7 @@ const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/m
 
 // Anthropic
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL: &str = "claude-3-5-haiku-latest";
+const ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION: &str = "2023-06-01"; // API protocol version
 
 /// LLM provider for text processing

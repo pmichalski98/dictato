@@ -626,7 +626,7 @@ export function GeneralSection({
 
       <ApiKeyCard
         label="Anthropic API Key"
-        description="Used for Claude 3.5 Haiku AI processing"
+        description="Used for Claude 4.5 Haiku AI processing"
         placeholder="sk-ant-..."
         linkUrl="https://console.anthropic.com/settings/keys"
         linkText="console.anthropic.com"
