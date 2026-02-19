@@ -10,6 +10,11 @@ const PCM16_NORMALIZE: f32 = 32768.0; // i16::MAX + 1, for normalizing PCM16 to 
 const INPUT_SAMPLE_RATE: u32 = 24000;
 const PARAKEET_SAMPLE_RATE: u32 = 16000;
 
+/// Silence padding appended before transcription so the model can finalize
+/// the last speech tokens. Without this, abrupt audio endings cause the TDT
+/// decoder to cut off the trailing words.
+const SILENCE_PADDING_SECS: f32 = 0.5;
+
 /// Minimum interval between download progress events
 const PROGRESS_THROTTLE_MS: u128 = 100;
 
@@ -275,6 +280,12 @@ pub fn transcribe_pcm16(state: &ParakeetState, pcm16_24khz: Vec<u8>) -> Result<S
         return Ok(String::new());
     }
 
+    // Pad with silence so the TDT decoder can finalize the last tokens.
+    // Without this, abrupt audio endings cause the model to drop trailing words.
+    let silence_frames = (INPUT_SAMPLE_RATE as f32 * SILENCE_PADDING_SECS) as usize;
+    let mut samples = samples;
+    samples.extend(std::iter::repeat(0.0f32).take(silence_frames));
+
     // Resample from 24kHz to 16kHz (Parakeet expects 16kHz)
     let samples = resample_audio(&samples, INPUT_SAMPLE_RATE, PARAKEET_SAMPLE_RATE)?;
 
@@ -307,29 +318,53 @@ pub fn transcribe_file_local(state: &ParakeetState, file_path: &Path) -> Result<
 }
 
 /// Resample audio using FFT-based resampling with proper anti-aliasing.
+/// Processes in fixed-size chunks so the internal resampler state carries over
+/// and no tail audio is lost.
 fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
     if from_rate == to_rate || samples.is_empty() {
         return Ok(samples.to_vec());
     }
 
+    let chunk_size = 1024;
     let mut resampler = FftFixedIn::<f32>::new(
         from_rate as usize,
         to_rate as usize,
-        samples.len(),
+        chunk_size,
         1, // sub_chunks
         1, // channels
     )
     .map_err(|e| format!("Failed to create resampler: {}", e))?;
 
-    let expected_len = resampler.input_frames_next();
-    let mut input = samples.to_vec();
-    input.resize(expected_len, 0.0);
+    let mut output = Vec::with_capacity(samples.len() * to_rate as usize / from_rate as usize);
+    let mut pos = 0;
 
-    let output = resampler
-        .process(&[input], None)
-        .map_err(|e| format!("Resampling failed: {}", e))?;
+    while pos < samples.len() {
+        let frames_needed = resampler.input_frames_next();
+        let end = (pos + frames_needed).min(samples.len());
+        let mut chunk = samples[pos..end].to_vec();
+        chunk.resize(frames_needed, 0.0); // zero-pad final chunk
 
-    Ok(output.into_iter().next().unwrap_or_default())
+        let resampled = resampler
+            .process(&[chunk], None)
+            .map_err(|e| format!("Resampling failed: {}", e))?;
+
+        if let Some(channel) = resampled.into_iter().next() {
+            output.extend(channel);
+        }
+
+        pos += frames_needed;
+    }
+
+    // Flush: one extra zero-padded chunk to push remaining samples through the filter
+    let frames_needed = resampler.input_frames_next();
+    let flush = vec![0.0f32; frames_needed];
+    if let Ok(resampled) = resampler.process(&[flush], None) {
+        if let Some(channel) = resampled.into_iter().next() {
+            output.extend(channel);
+        }
+    }
+
+    Ok(output)
 }
 
 pub fn delete_model(model_dir: &Path) -> Result<(), String> {
