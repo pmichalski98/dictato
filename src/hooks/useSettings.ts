@@ -41,7 +41,7 @@ export const LLM_PROVIDERS = {
   anthropic: {
     id: "anthropic" as const,
     name: "Anthropic",
-    model: "Claude 3.5 Haiku",
+    model: "Claude 4.5 Haiku",
   },
 } as const;
 
