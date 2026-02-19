@@ -28,7 +28,6 @@ const FLOATING_WINDOW_HEIGHT: f64 = 280.0;
 const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 
 // Audio processing constants
-const AUDIO_STOP_DRAIN_MS: u64 = 150; // Time to let receiver threads drain after audio stop
 
 // Statistics calculation constants
 const AVERAGE_TYPING_WPM: f64 = 40.0; // Average typing speed for time-saved calculations
@@ -89,12 +88,14 @@ static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
 pub struct AudioCaptureState {
     handle: AudioCaptureHandle,
+    receiver_handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Default for AudioCaptureState {
     fn default() -> Self {
         Self {
             handle: AudioCaptureHandle::new(),
+            receiver_handle: std::sync::Mutex::new(None),
         }
     }
 }
@@ -133,7 +134,7 @@ async fn start_recording(app: AppHandle) -> Result<(), String> {
 
     // Spawn task to receive audio data and store in buffer
     let groq_state_clone = app.state::<GroqState>().inner().clone();
-    std::thread::spawn(move || {
+    let receiver_handle = std::thread::spawn(move || {
         let mut chunks_received: usize = 0;
         let mut total_bytes: usize = 0;
         while let Ok(audio_chunk) = audio_rx.recv() {
@@ -148,6 +149,11 @@ async fn start_recording(app: AppHandle) -> Result<(), String> {
             chunks_received, total_bytes
         );
     });
+
+    // Store receiver handle so stop_recording can join it
+    if let Ok(mut guard) = audio_state.receiver_handle.lock() {
+        *guard = Some(receiver_handle);
+    }
 
     // Spawn task to receive audio levels and emit to frontend
     let app_clone = app.clone();
@@ -171,12 +177,21 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     // Unregister cancel shortcut since recording stopped
     unregister_cancel_shortcut(&app);
 
-    // Stop native audio capture
+    // Stop native audio capture (sends Stop command to audio thread)
     let audio_state = app.state::<AudioCaptureState>();
     audio_state.handle.stop();
 
-    // Allow receiver threads to drain remaining audio data
-    tokio::time::sleep(std::time::Duration::from_millis(AUDIO_STOP_DRAIN_MS)).await;
+    // Wait for receiver thread to finish draining all audio into the buffer.
+    // The receiver thread exits when the processing thread drops audio_sender,
+    // which happens after the audio thread processes the Stop command.
+    let receiver_handle = audio_state
+        .receiver_handle
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take());
+    if let Some(handle) = receiver_handle {
+        let _ = tokio::task::spawn_blocking(move || handle.join()).await;
+    }
 
     let groq_state = app.state::<GroqState>();
     let audio_data = groq_state.get_buffer()?;
@@ -380,6 +395,11 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     // Stop native audio capture
     let audio_state = app.state::<AudioCaptureState>();
     audio_state.handle.stop();
+
+    // Drop receiver handle (thread will exit when audio_sender is dropped)
+    if let Ok(mut guard) = audio_state.receiver_handle.lock() {
+        guard.take();
+    }
 
     // Clear buffer without transcribing
     let groq_state = app.state::<GroqState>();
