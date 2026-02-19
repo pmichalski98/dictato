@@ -1214,6 +1214,8 @@ fn collapse_floating_window(app: &AppHandle) -> Result<(), String> {
 
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         window.show().ok();
         window.set_focus().ok();
     }
@@ -1222,6 +1224,8 @@ fn show_main_window(app: &AppHandle) {
 fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         window.hide().ok();
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
 }
 
@@ -1317,6 +1321,10 @@ pub fn run() {
             delete_parakeet_model,
         ])
         .setup(|app| {
+            // Hide app from macOS dock (stealth mode - tray icon only)
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
 
