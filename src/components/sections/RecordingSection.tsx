@@ -1,15 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { formatShortcut, parseKeyboardEvent, BLOCKED_SHORTCUTS } from "@/lib/shortcuts";
+import { BLOCKED_SHORTCUTS } from "@/lib/shortcuts";
 import { ICON_SIZES, STATUS_RESET_DELAY_MS } from "@/lib/constants";
 import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
-import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
+import { ShortcutRecorder } from "../ui/shortcut-recorder";
 
 interface AudioDevice {
   deviceId: string;
@@ -64,10 +64,6 @@ export function RecordingSection({
   onUpdateShortcut,
   onUpdateCancelShortcut,
 }: RecordingSectionProps) {
-  const [localShortcut, setLocalShortcut] = useState("");
-  const [localCancelShortcut, setLocalCancelShortcut] = useState("");
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [isCapturingCancel, setIsCapturingCancel] = useState(false);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [cancelShortcutError, setCancelShortcutError] = useState<string | null>(null);
   const [microphones, setMicrophones] = useState<AudioDevice[]>([]);
@@ -99,98 +95,58 @@ export function RecordingSection({
   }, [loadMicrophones]);
 
   useEffect(() => {
-    setLocalShortcut(shortcut);
-    setLocalCancelShortcut(cancelShortcut);
-  }, [shortcut, cancelShortcut]);
-
-  useEffect(() => {
     if (shortcut) {
       invoke("register_shortcut", { shortcutStr: shortcut }).catch(console.error);
     }
   }, [shortcut]);
 
-  const handleStartCapture = useCallback(() => {
-    setIsCapturing(true);
-    setShortcutError(null);
+  const handleCaptureStart = useCallback((clearError: () => void) => {
+    clearError();
     invoke("unregister_shortcuts").catch(console.error);
   }, []);
 
-  const handleStopCapture = useCallback(() => {
-    setIsCapturing(false);
+  const handleCaptureEnd = useCallback(() => {
     if (shortcut) {
       invoke("register_shortcut", { shortcutStr: shortcut }).catch(console.error);
     }
   }, [shortcut]);
 
-  const handleCaptureShortcut = useCallback(
-    (e: React.KeyboardEvent) => {
-      e.preventDefault();
+  const handleRecordingCaptureStart = useCallback(
+    () => handleCaptureStart(() => setShortcutError(null)),
+    [handleCaptureStart]
+  );
 
-      const { shortcutString } = parseKeyboardEvent(e);
+  const handleCancelCaptureStart = useCallback(
+    () => handleCaptureStart(() => setCancelShortcutError(null)),
+    [handleCaptureStart]
+  );
 
-      if (shortcutString) {
-        if (BLOCKED_SHORTCUTS.includes(shortcutString as typeof BLOCKED_SHORTCUTS[number])) {
-          setShortcutError("Conflicts with clipboard");
-          setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
-          return;
-        }
-
-        if (shortcutString === cancelShortcut) {
-          setShortcutError("Same as cancel shortcut");
-          setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
-          return;
-        }
-
-        setLocalShortcut(shortcutString);
-        onUpdateShortcut(shortcutString);
-        setIsCapturing(false);
+  const handleShortcutChange = useCallback(
+    (newShortcut: string) => {
+      if (BLOCKED_SHORTCUTS.includes(newShortcut as typeof BLOCKED_SHORTCUTS[number])) {
+        setShortcutError("Conflicts with clipboard shortcuts (Ctrl+V/C/X)");
+        setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
+        return;
       }
+      if (newShortcut === cancelShortcut) {
+        setShortcutError("Same as cancel shortcut");
+        setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
+        return;
+      }
+      onUpdateShortcut(newShortcut);
     },
     [onUpdateShortcut, cancelShortcut]
   );
 
-  const handleStartCancelCapture = useCallback(() => {
-    setIsCapturingCancel(true);
-    setCancelShortcutError(null);
-    invoke("unregister_shortcuts").catch(console.error);
-  }, []);
-
-  const handleStopCancelCapture = useCallback(() => {
-    setIsCapturingCancel(false);
-    if (shortcut) {
-      invoke("register_shortcut", { shortcutStr: shortcut }).catch(console.error);
-    }
-  }, [shortcut]);
-
-  const handleCaptureCancelShortcut = useCallback(
-    (e: React.KeyboardEvent) => {
-      e.preventDefault();
-
-      const key = e.key;
-
-      // Allow Escape as a single key for cancel
-      if (key === "Escape") {
-        setLocalCancelShortcut("Escape");
-        onUpdateCancelShortcut("Escape");
-        invoke("register_cancel_shortcut", { shortcutStr: "Escape" }).catch(console.error);
-        setIsCapturingCancel(false);
+  const handleCancelShortcutChange = useCallback(
+    (newShortcut: string) => {
+      if (newShortcut === shortcut) {
+        setCancelShortcutError("Same as recording shortcut");
+        setTimeout(() => setCancelShortcutError(null), STATUS_RESET_DELAY_MS);
         return;
       }
-
-      const { shortcutString } = parseKeyboardEvent(e);
-
-      if (shortcutString) {
-        if (shortcutString === shortcut) {
-          setCancelShortcutError("Same as recording shortcut");
-          setTimeout(() => setCancelShortcutError(null), STATUS_RESET_DELAY_MS);
-          return;
-        }
-
-        setLocalCancelShortcut(shortcutString);
-        onUpdateCancelShortcut(shortcutString);
-        invoke("register_cancel_shortcut", { shortcutStr: shortcutString }).catch(console.error);
-        setIsCapturingCancel(false);
-      }
+      onUpdateCancelShortcut(newShortcut);
+      invoke("register_cancel_shortcut", { shortcutStr: newShortcut }).catch(console.error);
     },
     [onUpdateCancelShortcut, shortcut]
   );
@@ -285,75 +241,31 @@ export function RecordingSection({
         {/* Recording Shortcut */}
         <div className="space-y-1.5">
           <Label>Recording Shortcut</Label>
-          <Input
-            type="text"
-            value={formatShortcut(localShortcut)}
-            readOnly
-            onFocus={handleStartCapture}
-            onBlur={handleStopCapture}
-            onKeyDown={isCapturing ? handleCaptureShortcut : undefined}
-            placeholder="Click and press keys..."
-            capturing={isCapturing}
-            error={!!shortcutError}
+          <ShortcutRecorder
+            value={shortcut}
+            onChange={handleShortcutChange}
+            onCaptureStart={handleRecordingCaptureStart}
+            onCaptureEnd={handleCaptureEnd}
+            error={shortcutError}
+            placeholder="Click to set recording shortcut"
           />
-          {isCapturing && !shortcutError && (
-            <p className="text-[11px] text-muted-foreground animate-pulse">
-              Press your key combination...
-            </p>
-          )}
-          {shortcutError && (
-            <div className="flex items-center gap-2 px-2 py-1.5 bg-destructive/10 border border-destructive/20 rounded-md">
-              <div className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[12px] text-destructive-foreground font-medium">
-                  {shortcutError}
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Ctrl+V/C/X reserved for clipboard — try Ctrl+Shift+Space
-                </span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Cancel Shortcut */}
         <div className="space-y-1.5">
           <Label>Cancel Shortcut</Label>
-          <Input
-            type="text"
-            value={formatShortcut(localCancelShortcut)}
-            readOnly
-            onFocus={handleStartCancelCapture}
-            onBlur={handleStopCancelCapture}
-            onKeyDown={isCapturingCancel ? handleCaptureCancelShortcut : undefined}
-            placeholder="Click and press keys..."
-            capturing={isCapturingCancel}
-            error={!!cancelShortcutError}
+          <ShortcutRecorder
+            value={cancelShortcut}
+            onChange={handleCancelShortcutChange}
+            onCaptureStart={handleCancelCaptureStart}
+            onCaptureEnd={handleCaptureEnd}
+            error={cancelShortcutError}
+            allowSingleKey
+            singleKeyAllowList={["Escape"]}
+            placeholder="Click to set cancel shortcut"
           />
-          {isCapturingCancel && !cancelShortcutError && (
-            <p className="text-[11px] text-muted-foreground animate-pulse">
-              Press Escape or a key combination...
-            </p>
-          )}
-          {cancelShortcutError && (
-            <div className="flex items-center gap-2 px-2 py-1.5 bg-destructive/10 border border-destructive/20 rounded-md">
-              <div className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
-              <span className="text-[12px] text-destructive-foreground font-medium">
-                {cancelShortcutError}
-              </span>
-            </div>
-          )}
         </div>
       </Card>
-
-      {/* Hint */}
-      <p className="text-muted-foreground text-[11px] text-center">
-        Press{" "}
-        <code className="bg-primary/10 text-primary px-1.5 py-0.5 rounded font-mono text-[11px]">
-          {formatShortcut(shortcut) || "your shortcut"}
-        </code>{" "}
-        anywhere to start dictating
-      </p>
     </SectionLayout>
   );
 }
