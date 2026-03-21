@@ -430,14 +430,38 @@ fn check_accessibility_permissions() -> bool {
     true
 }
 
-/// Perform the actual paste operation
-/// On macOS, uses AppleScript which is more reliable than enigo for keyboard simulation
-/// because it runs in a separate process and doesn't have threading issues
+/// Perform the actual paste operation using CGEvent (native macOS API)
+/// CGEvent is thread-safe and doesn't require main thread, unlike enigo's TIS/TSM calls
 #[cfg(target_os = "macos")]
 fn perform_paste() -> Result<(), String> {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    // macOS virtual keycode for 'V' = 9 (kVK_ANSI_V)
+    const KEYCODE_V: u16 = 9;
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "Failed to create CGEventSource".to_string())?;
+
+    let key_down = CGEvent::new_keyboard_event(source.clone(), KEYCODE_V, true)
+        .map_err(|_| "Failed to create key-down event".to_string())?;
+    let key_up = CGEvent::new_keyboard_event(source, KEYCODE_V, false)
+        .map_err(|_| "Failed to create key-up event".to_string())?;
+
+    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+
+    key_down.post(CGEventTapLocation::HID);
+    key_up.post(CGEventTapLocation::HID);
+
+    Ok(())
+}
+
+/// Fallback paste using AppleScript/osascript (used if CGEvent fails)
+#[cfg(target_os = "macos")]
+fn perform_paste_fallback() -> Result<(), String> {
     use std::process::Command;
 
-    // Use AppleScript to simulate Cmd+V - this is more reliable than enigo
     let output = Command::new("osascript")
         .args([
             "-e",
@@ -495,17 +519,34 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
         }
     }
 
-    // Small delay to let the system settle
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Small delay to let clipboard propagate through the pasteboard system
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
-    // Run enigo operations in a blocking task to avoid tokio runtime issues
-    // This ensures enigo runs on a dedicated thread, not the tokio worker pool
-    let paste_result = tokio::task::spawn_blocking(perform_paste).await;
+    // Run paste in a blocking task to avoid tokio runtime issues
+    let paste_result = tokio::task::spawn_blocking(|| {
+        match perform_paste() {
+            Ok(()) => {
+                println!("[Dictato] Auto-pasted (CGEvent)");
+                Ok(())
+            }
+            #[cfg(target_os = "macos")]
+            Err(e) => {
+                println!("[Dictato] CGEvent paste failed: {}. Trying AppleScript fallback...", e);
+                match perform_paste_fallback() {
+                    Ok(()) => {
+                        println!("[Dictato] Auto-pasted (AppleScript fallback)");
+                        Ok(())
+                    }
+                    Err(e2) => Err(e2),
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            Err(e) => Err(e),
+        }
+    }).await;
 
     match paste_result {
-        Ok(Ok(())) => {
-            println!("[Dictato] Auto-pasted");
-        }
+        Ok(Ok(())) => {}
         Ok(Err(e)) => {
             println!("[Dictato] Auto-paste failed: {}. Text is in clipboard - press Cmd+V to paste.", e);
         }
