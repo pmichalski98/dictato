@@ -31,12 +31,12 @@ export const LLM_PROVIDERS = {
   openai: {
     id: "openai" as const,
     name: "OpenAI",
-    model: "GPT-4.1 Mini",
+    model: "GPT-5.4 Mini",
   },
   google: {
     id: "google" as const,
     name: "Google",
-    model: "Gemini 2.0 Flash",
+    model: "Gemini 3.1 Flash Lite",
   },
   anthropic: {
     id: "anthropic" as const,

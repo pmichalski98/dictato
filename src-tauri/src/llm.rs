@@ -5,14 +5,14 @@ const LLM_TIMEOUT_SECS: u64 = 30;
 
 // OpenAI
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL: &str = "gpt-4.1-mini";
+const OPENAI_MODEL: &str = "gpt-5.4-mini";
 
 // Google Gemini
-const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
 
 // Anthropic
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
+const ANTHROPIC_MODEL: &str = "claude-haiku-4-5";
 const ANTHROPIC_VERSION: &str = "2023-06-01"; // API protocol version
 
 /// LLM provider for text processing
