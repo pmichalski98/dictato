@@ -237,8 +237,9 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         parakeet::set_transcribing(true);
         let whisper_state = app.state::<whisper::WhisperState>();
         let state_clone = whisper_state.inner().clone();
+        let lang = language.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_pcm16(&state_clone, audio_data);
+            let r = whisper::transcribe_pcm16(&state_clone, audio_data, &lang);
             parakeet::set_transcribing(false);
             r
         })
@@ -1101,9 +1102,10 @@ async fn transcribe_file(
         let whisper_state = app.state::<whisper::WhisperState>();
         let state_clone = whisper_state.inner().clone();
         let audio_path_clone = audio_path.clone();
+        let lang = language.clone();
 
         let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone);
+            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone, &lang);
             parakeet::set_transcribing(false);
             r
         })
