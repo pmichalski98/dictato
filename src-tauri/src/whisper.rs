@@ -171,9 +171,12 @@ pub fn load_model(state: &WhisperState, model_dir: &Path) -> Result<(), String> 
     let model_path = model_dir.join(MODEL_FILE_NAME);
     println!("[Whisper] Loading model from {:?}", model_path);
 
+    let mut ctx_params = WhisperContextParameters::default();
+    ctx_params.flash_attn = true; // Fused QKV kernel — ~20-40% faster attention on Metal
+
     let ctx = WhisperContext::new_with_params(
         model_path.to_str().ok_or("Invalid model path")?,
-        WhisperContextParameters::default(),
+        ctx_params,
     )
     .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
 
@@ -193,7 +196,7 @@ pub fn is_model_loaded(state: &WhisperState) -> bool {
     state.model.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
-pub fn transcribe_pcm16(state: &WhisperState, pcm16_24khz: Vec<u8>) -> Result<String, String> {
+pub fn transcribe_pcm16(state: &WhisperState, pcm16_24khz: Vec<u8>, language: &str) -> Result<String, String> {
     let mut model_guard = state.lock_model();
     let ctx = model_guard
         .as_mut()
@@ -221,10 +224,10 @@ pub fn transcribe_pcm16(state: &WhisperState, pcm16_24khz: Vec<u8>) -> Result<St
         WHISPER_SAMPLE_RATE
     );
 
-    run_whisper_inference(ctx, &samples)
+    run_whisper_inference(ctx, &samples, language)
 }
 
-pub fn transcribe_file_local(state: &WhisperState, file_path: &Path) -> Result<String, String> {
+pub fn transcribe_file_local(state: &WhisperState, file_path: &Path, language: &str) -> Result<String, String> {
     let mut model_guard = state.lock_model();
     let ctx = model_guard
         .as_mut()
@@ -236,7 +239,7 @@ pub fn transcribe_file_local(state: &WhisperState, file_path: &Path) -> Result<S
     // The file has already been converted to a suitable format by the transcribe pipeline
     let samples = read_audio_file_as_f32(file_path)?;
 
-    run_whisper_inference(ctx, &samples)
+    run_whisper_inference(ctx, &samples, language)
 }
 
 /// Read an audio file (WAV format from ffmpeg pipeline) and return f32 samples at 16kHz mono.
@@ -327,14 +330,35 @@ fn read_audio_file_as_f32(file_path: &Path) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-fn run_whisper_inference(ctx: &mut WhisperContext, samples: &[f32]) -> Result<String, String> {
+fn run_whisper_inference(ctx: &mut WhisperContext, samples: &[f32], language: &str) -> Result<String, String> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_suppress_blank(true);
-    params.set_language(Some("auto"));
+
+    // Performance: use explicit thread count
+    let n_threads = (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4) as i32)
+        .min(8);
+    params.set_n_threads(n_threads);
+
+    // "auto" triggers a language detection encoder pass (slower but multilingual)
+    // Explicit language codes (e.g. "en", "pl") skip detection for faster inference
+    if language == "auto" {
+        params.set_language(Some("auto"));
+    } else {
+        params.set_language(Some(language));
+    }
+
+    // Performance: disable temperature retry schedule (default retries up to 6x)
+    params.set_temperature(0.0);
+    params.set_temperature_inc(0.0);
+
+    // No cross-segment context carryover needed for dictation
+    params.set_no_context(true);
 
     // Create a new state for this inference
     let mut state = ctx
