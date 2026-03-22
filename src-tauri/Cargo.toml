@@ -35,6 +35,8 @@ tauri-plugin-os = "2"
 regex = "1"
 once_cell = "1"
 parakeet-rs = "0.3"
+whisper-rs = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+whisper-rs = { version = "0.13", features = ["metal"] }
