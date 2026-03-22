@@ -49,12 +49,14 @@ pub const EVENT_LOADING: &str = "parakeet-loading";
 pub enum SttProvider {
     Groq,
     Parakeet,
+    Whisper,
 }
 
 impl SttProvider {
     pub fn from_store_value(s: &str) -> Self {
         match s {
             "parakeet" => Self::Parakeet,
+            "whisper" => Self::Whisper,
             _ => Self::Groq,
         }
     }

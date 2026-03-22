@@ -3,6 +3,7 @@ mod groq;
 mod llm;
 mod parakeet;
 mod transcribe;
+mod whisper;
 
 use audio::{AudioCaptureHandle, AudioDevice};
 #[cfg(not(target_os = "macos"))]
@@ -215,6 +216,29 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         let state_clone = parakeet_state.inner().clone();
         let result = tokio::task::spawn_blocking(move || {
             let r = parakeet::transcribe_pcm16(&state_clone, audio_data);
+            parakeet::set_transcribing(false);
+            r
+        })
+        .await
+        .map_err(|e| {
+            parakeet::set_transcribing(false);
+            format!("Transcription task failed: {}", e)
+        })?;
+        match result {
+            Ok(text) => text,
+            Err(e) => {
+                app.emit("processing-state", false).ok();
+                return Err(e);
+            }
+        }
+    } else if stt_provider == parakeet::SttProvider::Whisper {
+        println!("[Dictato] Transcribing {} bytes locally with Whisper", audio_data.len());
+        app.emit("processing-state", true).ok();
+        parakeet::set_transcribing(true);
+        let whisper_state = app.state::<whisper::WhisperState>();
+        let state_clone = whisper_state.inner().clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let r = whisper::transcribe_pcm16(&state_clone, audio_data);
             parakeet::set_transcribing(false);
             r
         })
@@ -591,6 +615,10 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                             let parakeet_state = app.state::<parakeet::ParakeetState>();
                             parakeet::is_model_loaded(&parakeet_state)
                         }
+                        parakeet::SttProvider::Whisper => {
+                            let whisper_state = app.state::<whisper::WhisperState>();
+                            whisper::is_model_loaded(&whisper_state)
+                        }
                         parakeet::SttProvider::Groq => {
                             get_groq_api_key_from_store(&app).is_some()
                         }
@@ -604,6 +632,9 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                         match stt_provider {
                             parakeet::SttProvider::Parakeet => {
                                 show_error(&app, "Parakeet model not loaded. Download it in Settings.");
+                            }
+                            parakeet::SttProvider::Whisper => {
+                                show_error(&app, "Whisper model not loaded. Download it in Settings.");
                             }
                             parakeet::SttProvider::Groq => {
                                 show_error(&app, "No API key configured. Add your Groq API key in Settings.");
@@ -877,6 +908,54 @@ async fn delete_parakeet_model(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ============== Whisper commands ==============
+
+#[tauri::command]
+async fn get_whisper_model_status(app: AppHandle) -> Result<String, String> {
+    let model_dir = whisper::get_model_dir(&app)?;
+    if whisper::is_model_downloaded(&model_dir) {
+        let whisper_state = app.state::<whisper::WhisperState>();
+        if whisper::is_model_loaded(&whisper_state) {
+            Ok("ready".to_string())
+        } else {
+            Ok("downloaded".to_string())
+        }
+    } else {
+        Ok("not_downloaded".to_string())
+    }
+}
+
+#[tauri::command]
+async fn download_whisper_model(app: AppHandle) -> Result<(), String> {
+    whisper::download_model(&app).await?;
+
+    // Load model after download
+    let model_dir = whisper::get_model_dir(&app)?;
+    let whisper_state = app.state::<whisper::WhisperState>();
+    let state_clone = whisper_state.inner().clone();
+
+    tokio::task::spawn_blocking(move || whisper::load_model(&state_clone, &model_dir))
+        .await
+        .map_err(|e| format!("Load task failed: {}", e))??;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_whisper_model(app: AppHandle) -> Result<(), String> {
+    if IS_RECORDING.load(Ordering::SeqCst) || parakeet::is_transcribing() {
+        return Err("Cannot delete model during active recording or transcription".to_string());
+    }
+
+    let whisper_state = app.state::<whisper::WhisperState>();
+    whisper::unload_model(&whisper_state)?;
+
+    let model_dir = whisper::get_model_dir(&app)?;
+    whisper::delete_model(&model_dir)?;
+
+    Ok(())
+}
+
 // ============== Autostart commands (Windows only) ==============
 
 #[tauri::command]
@@ -1015,6 +1094,25 @@ async fn transcribe_file(
             format!("Transcription task failed: {}", e)
         })?;
         result?
+    } else if stt_provider == parakeet::SttProvider::Whisper {
+        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing locally with Whisper...");
+
+        parakeet::set_transcribing(true);
+        let whisper_state = app.state::<whisper::WhisperState>();
+        let state_clone = whisper_state.inner().clone();
+        let audio_path_clone = audio_path.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone);
+            parakeet::set_transcribing(false);
+            r
+        })
+        .await
+        .map_err(|e| {
+            parakeet::set_transcribing(false);
+            format!("Transcription task failed: {}", e)
+        })?;
+        result?
     } else {
         let groq_api_key = get_groq_api_key_from_store(&app)
             .ok_or("Groq API key required. Add it in Settings.")?;
@@ -1132,6 +1230,12 @@ async fn transcribe_youtube(
             let parakeet_state = app.state::<parakeet::ParakeetState>();
             if !parakeet::is_model_loaded(&parakeet_state) {
                 return Err("Parakeet model not loaded. Download it in Settings.".to_string());
+            }
+        }
+        parakeet::SttProvider::Whisper => {
+            let whisper_state = app.state::<whisper::WhisperState>();
+            if !whisper::is_model_loaded(&whisper_state) {
+                return Err("Whisper model not loaded. Download it in Settings.".to_string());
             }
         }
         parakeet::SttProvider::Groq => {
@@ -1356,6 +1460,7 @@ pub fn run() {
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
         .manage(parakeet::ParakeetState::default())
+        .manage(whisper::WhisperState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -1380,6 +1485,9 @@ pub fn run() {
             get_parakeet_model_status,
             download_parakeet_model,
             delete_parakeet_model,
+            get_whisper_model_status,
+            download_whisper_model,
+            delete_whisper_model,
         ])
         .setup(|app| {
             // Hide app from macOS dock (stealth mode - tray icon only)
@@ -1416,6 +1524,35 @@ pub fn run() {
                                 Err(e) => {
                                     eprintln!("[Parakeet] Failed to load model on startup: {}", e);
                                     app_handle.emit(parakeet::EVENT_LOADING, false).ok();
+                                }
+                            }
+                        });
+                    } else {
+                        show_main_window(app.handle());
+                    }
+                }
+                parakeet::SttProvider::Whisper => {
+                    let model_dir = match whisper::get_model_dir(app.handle()) {
+                        Ok(dir) => dir,
+                        Err(e) => {
+                            eprintln!("[Whisper] Failed to get model dir on startup: {}", e);
+                            show_main_window(app.handle());
+                            return Ok(());
+                        }
+                    };
+                    if whisper::is_model_downloaded(&model_dir) {
+                        let whisper_state = app.state::<whisper::WhisperState>();
+                        let state_clone = whisper_state.inner().clone();
+                        let app_handle = app.handle().clone();
+                        std::thread::spawn(move || {
+                            app_handle.emit(whisper::EVENT_LOADING, true).ok();
+                            match whisper::load_model(&state_clone, &model_dir) {
+                                Ok(_) => {
+                                    app_handle.emit(whisper::EVENT_LOADING, false).ok();
+                                }
+                                Err(e) => {
+                                    eprintln!("[Whisper] Failed to load model on startup: {}", e);
+                                    app_handle.emit(whisper::EVENT_LOADING, false).ok();
                                 }
                             }
                         });
