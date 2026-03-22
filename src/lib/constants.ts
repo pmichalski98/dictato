@@ -51,6 +51,8 @@ export const EVENTS = {
   TRANSCRIBE_PROGRESS: "transcribe-progress",
   PARAKEET_DOWNLOAD_PROGRESS: "parakeet-download-progress",
   PARAKEET_LOADING: "parakeet-loading",
+  WHISPER_DOWNLOAD_PROGRESS: "whisper-download-progress",
+  WHISPER_LOADING: "whisper-loading",
 } as const;
 
 /**

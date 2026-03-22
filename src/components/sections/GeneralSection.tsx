@@ -429,6 +429,199 @@ function ParakeetModelCard() {
   );
 }
 
+type WhisperStatus =
+  | "checking"
+  | "not_downloaded"
+  | "downloading"
+  | "loading"
+  | "downloaded"
+  | "ready"
+  | "error";
+
+function WhisperModelCard() {
+  const [status, setStatus] = useState<WhisperStatus>("checking");
+  const [downloadProgress, setDownloadProgress] =
+    useState<DownloadProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkStatus() {
+      try {
+        const result = await invoke<string>("get_whisper_model_status");
+        setStatus(result as WhisperStatus);
+      } catch (err) {
+        console.error("Failed to check Whisper model status:", err);
+        setStatus("error");
+        setError(String(err));
+      }
+    }
+    checkStatus();
+  }, []);
+
+  useEffect(() => {
+    const unlistenProgress = listen<DownloadProgress>(
+      EVENTS.WHISPER_DOWNLOAD_PROGRESS,
+      (event) => {
+        setDownloadProgress(event.payload);
+      }
+    );
+    const unlistenLoading = listen<boolean>(
+      EVENTS.WHISPER_LOADING,
+      (event) => {
+        if (event.payload) {
+          setStatus("loading");
+        } else {
+          invoke<string>("get_whisper_model_status")
+            .then((result) => setStatus(result as WhisperStatus))
+            .catch(() => {});
+        }
+      }
+    );
+    return () => {
+      unlistenProgress.then((fn) => fn());
+      unlistenLoading.then((fn) => fn());
+    };
+  }, []);
+
+  const handleDownload = useCallback(async () => {
+    setStatus("downloading");
+    setError(null);
+    setDownloadProgress(null);
+    try {
+      await invoke("download_whisper_model");
+      setStatus("ready");
+    } catch (err) {
+      console.error("Failed to download Whisper model:", err);
+      setStatus("error");
+      setError(String(err));
+    }
+  }, []);
+
+  const handleDelete = useCallback(async () => {
+    setError(null);
+    try {
+      await invoke("delete_whisper_model");
+      setStatus("not_downloaded");
+      setDownloadProgress(null);
+    } catch (err) {
+      console.error("Failed to delete Whisper model:", err);
+      setError(String(err));
+    }
+  }, []);
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <Card className="space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <HardDrive size={ICON_SIZES.sm} className="text-muted-foreground" />
+          <Label>Whisper Model</Label>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          OpenAI Whisper large-v3-turbo (q5_0 quantized, ~850 MB download).
+          Metal GPU accelerated on macOS.
+        </p>
+      </div>
+
+      {status === "checking" && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
+          Checking model status...
+        </div>
+      )}
+
+      {status === "not_downloaded" && (
+        <Button onClick={handleDownload} className="w-full">
+          <Download size={ICON_SIZES.sm} className="mr-1.5" />
+          Download Model (~850 MB)
+        </Button>
+      )}
+
+      {status === "downloading" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-muted-foreground">
+              Downloading model...
+            </span>
+            <span className="text-foreground font-medium">
+              {downloadProgress
+                ? `${downloadProgress.percent.toFixed(0)}%`
+                : ""}
+            </span>
+          </div>
+          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300"
+              style={{
+                width: `${downloadProgress?.percent ?? 0}%`,
+              }}
+            />
+          </div>
+          {downloadProgress?.bytesDownloaded != null &&
+            downloadProgress?.totalBytes != null &&
+            downloadProgress.totalBytes > 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                {formatBytes(downloadProgress.bytesDownloaded)} /{" "}
+                {formatBytes(downloadProgress.totalBytes)}
+              </p>
+            )}
+        </div>
+      )}
+
+      {status === "loading" && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
+          Loading model into memory...
+        </div>
+      )}
+
+      {(status === "ready" || status === "downloaded") && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                status === "ready"
+                  ? "bg-green-500 animate-pulse"
+                  : "bg-amber-500"
+              }`}
+            />
+            <span className="text-[11px] text-muted-foreground">
+              Model{" "}
+              <span className="text-foreground font-medium">
+                {status === "ready" ? "ready" : "downloaded (not loaded)"}
+              </span>
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            className="text-[11px] text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 size={ICON_SIZES.xs} className="mr-1" />
+            Delete model
+          </Button>
+        </div>
+      )}
+
+      {error && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-destructive">{error}</p>
+          {status === "error" && (
+            <Button onClick={handleDownload} variant="default" size="sm">
+              Retry Download
+            </Button>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 interface GeneralSectionProps {
   sttProvider: SttProvider;
   groqApiKey: string;
@@ -536,6 +729,8 @@ export function GeneralSection({
       </Card>
 
       {sttProvider === "parakeet" && <ParakeetModelCard />}
+
+      {sttProvider === "whisper" && <WhisperModelCard />}
 
       {sttProvider === "groq" && (
         <ApiKeyCard

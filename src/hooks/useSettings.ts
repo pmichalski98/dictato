@@ -9,7 +9,7 @@ import type { IconName } from "@/components/IconPicker";
 export { DEFAULT_MODES };
 
 // STT Provider types
-export type SttProvider = "groq" | "parakeet";
+export type SttProvider = "groq" | "parakeet" | "whisper";
 
 export const STT_PROVIDERS = {
   groq: {
@@ -21,6 +21,11 @@ export const STT_PROVIDERS = {
     id: "parakeet" as const,
     name: "Parakeet Local",
     description: "Local transcription, no API key needed",
+  },
+  whisper: {
+    id: "whisper" as const,
+    name: "Whisper Local",
+    description: "Local Whisper large-v3-turbo with Metal GPU",
   },
 } as const;
 
