@@ -438,20 +438,33 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
 
 /// Check if accessibility permissions are granted on macOS using the proper API
 #[cfg(target_os = "macos")]
-fn check_accessibility_permissions() -> bool {
-    // Use AXIsProcessTrusted from ApplicationServices framework
-    // This is the proper way to check accessibility permissions
+fn check_accessibility_permissions(prompt: bool) -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
-        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
     }
 
-    // SAFETY: AXIsProcessTrusted is a safe system call that just returns a boolean
-    unsafe { AXIsProcessTrusted() }
+    if prompt {
+        // Trigger the native macOS accessibility permission dialog
+        // This also forces a fresh trust evaluation, working around stale code signature issues
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let value = CFBoolean::true_value();
+        let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
+        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
+    } else {
+        // Quick check without prompting - used during paste flow
+        let options = std::ptr::null();
+        unsafe { AXIsProcessTrustedWithOptions(options) }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn check_accessibility_permissions() -> bool {
+fn check_accessibility_permissions(_prompt: bool) -> bool {
     true
 }
 
@@ -465,7 +478,7 @@ fn perform_paste() -> Result<(), String> {
     // macOS virtual keycode for 'V' = 9 (kVK_ANSI_V)
     const KEYCODE_V: u16 = 9;
 
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
         .map_err(|_| "Failed to create CGEventSource".to_string())?;
 
     let key_down = CGEvent::new_keyboard_event(source.clone(), KEYCODE_V, true)
@@ -516,6 +529,23 @@ fn perform_paste() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn check_accessibility(prompt: bool) -> bool {
+    check_accessibility_permissions(prompt)
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn()
+            .map_err(|e| format!("Failed to open Accessibility settings: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     // Always copy to clipboard first
     app.clipboard()
@@ -537,7 +567,7 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     // Check accessibility permissions first on macOS
     #[cfg(target_os = "macos")]
     {
-        if !check_accessibility_permissions() {
+        if !check_accessibility_permissions(false) {
             println!("[Dictato] Accessibility permissions not granted. Text copied to clipboard - press Cmd+V to paste.");
             println!("[Dictato] Grant permissions in System Settings → Privacy & Security → Accessibility");
             return Ok(());
@@ -1468,6 +1498,8 @@ pub fn run() {
             stop_recording,
             cancel_recording,
             copy_and_paste,
+            check_accessibility,
+            open_accessibility_settings,
             register_shortcut,
             register_cancel_shortcut,
             unregister_shortcuts,

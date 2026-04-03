@@ -39,4 +39,5 @@ whisper-rs = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+core-foundation = "0.10"
 whisper-rs = { version = "0.13", features = ["metal"] }

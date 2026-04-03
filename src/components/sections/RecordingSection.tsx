@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { RefreshCw } from "lucide-react";
+import { platform } from "@tauri-apps/plugin-os";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { BLOCKED_SHORTCUTS } from "@/lib/shortcuts";
 import { ICON_SIZES, STATUS_RESET_DELAY_MS } from "@/lib/constants";
@@ -71,6 +72,8 @@ export function RecordingSection({
     "granted" | "denied" | "prompt" | "unknown"
   >("unknown");
   const [isLoadingMics, setIsLoadingMics] = useState(false);
+  const [isMacOS, setIsMacOS] = useState(false);
+  const [accessibilityGranted, setAccessibilityGranted] = useState(true);
 
   const loadMicrophones = useCallback(async () => {
     setIsLoadingMics(true);
@@ -93,6 +96,40 @@ export function RecordingSection({
   useEffect(() => {
     loadMicrophones();
   }, [loadMicrophones]);
+
+  useEffect(() => {
+    setIsMacOS(platform() === "macos");
+  }, []);
+
+  useEffect(() => {
+    if (autoPaste && isMacOS) {
+      invoke<boolean>("check_accessibility", { prompt: false })
+        .then(setAccessibilityGranted)
+        .catch(() => setAccessibilityGranted(false));
+    }
+  }, [autoPaste, isMacOS]);
+
+  const handleAutoPasteChange = useCallback(
+    async (enabled: boolean | "indeterminate") => {
+      if (enabled === "indeterminate") return;
+      onUpdateAutoPaste(enabled);
+      if (enabled && isMacOS) {
+        try {
+          const granted = await invoke<boolean>("check_accessibility", {
+            prompt: true,
+          });
+          setAccessibilityGranted(granted);
+        } catch {
+          setAccessibilityGranted(false);
+        }
+      }
+    },
+    [onUpdateAutoPaste, isMacOS]
+  );
+
+  const handleOpenAccessibilitySettings = useCallback(async () => {
+    await invoke("open_accessibility_settings").catch(console.error);
+  }, []);
 
   useEffect(() => {
     if (shortcut) {
@@ -226,13 +263,39 @@ export function RecordingSection({
           <label className="flex items-center gap-2 cursor-pointer">
             <Checkbox
               checked={autoPaste}
-              onCheckedChange={onUpdateAutoPaste}
+              onCheckedChange={handleAutoPasteChange}
             />
             <span className="text-[12px] text-muted-foreground">
-              Automatically paste transcription (requires Accessibility
-              permission)
+              Automatically paste transcription
             </span>
           </label>
+          {autoPaste && isMacOS && (
+            <div className="space-y-1.5 pl-6">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    accessibilityGranted ? "bg-green-500" : "bg-destructive"
+                  }`}
+                />
+                <span className="text-[11px] text-muted-foreground">
+                  {accessibilityGranted
+                    ? "Accessibility permission granted"
+                    : "Accessibility permission required"}
+                </span>
+              </div>
+              {!accessibilityGranted && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-7 text-[11px] gap-1.5"
+                  onClick={handleOpenAccessibilitySettings}
+                >
+                  <ExternalLink size={ICON_SIZES.xs} />
+                  Open Accessibility Settings
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </Card>
 
