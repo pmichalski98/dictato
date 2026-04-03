@@ -4,6 +4,8 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>Dictato needs microphone access to transcribe your voice to text.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Dictato needs accessibility access to automatically paste transcribed text into your active application.</string>
     <key>NSCameraUseContinuityCameraDeviceType</key>
     <true/>
     <key>LSUIElement</key>

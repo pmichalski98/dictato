@@ -131,6 +131,17 @@ export function RecordingSection({
     await invoke("open_accessibility_settings").catch(console.error);
   }, []);
 
+  const handleRecheckAccessibility = useCallback(async () => {
+    try {
+      const granted = await invoke<boolean>("check_accessibility", {
+        prompt: true,
+      });
+      setAccessibilityGranted(granted);
+    } catch {
+      setAccessibilityGranted(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (shortcut) {
       invoke("register_shortcut", { shortcutStr: shortcut }).catch(console.error);
@@ -274,25 +285,41 @@ export function RecordingSection({
               <div className="flex items-center gap-2">
                 <div
                   className={`w-1.5 h-1.5 rounded-full ${
-                    accessibilityGranted ? "bg-green-500" : "bg-destructive"
+                    accessibilityGranted ? "bg-green-500" : "bg-yellow-500"
                   }`}
                 />
                 <span className="text-[11px] text-muted-foreground">
                   {accessibilityGranted
                     ? "Accessibility permission granted"
-                    : "Accessibility permission required"}
+                    : "Accessibility permission may be needed"}
                 </span>
+                {!accessibilityGranted && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5"
+                    onClick={handleRecheckAccessibility}
+                    title="Re-check permissions"
+                  >
+                    <RefreshCw size={ICON_SIZES.xs} />
+                  </Button>
+                )}
               </div>
               {!accessibilityGranted && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-7 text-[11px] gap-1.5"
-                  onClick={handleOpenAccessibilitySettings}
-                >
-                  <ExternalLink size={ICON_SIZES.xs} />
-                  Open Accessibility Settings
-                </Button>
+                <div className="space-y-1.5">
+                  <p className="text-[10px] text-muted-foreground/70">
+                    If auto-paste doesn't work: remove Dictato from Accessibility list, re-add it, then restart the app.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 text-[11px] gap-1.5"
+                    onClick={handleOpenAccessibilitySettings}
+                  >
+                    <ExternalLink size={ICON_SIZES.xs} />
+                    Open Accessibility Settings
+                  </Button>
+                </div>
               )}
             </div>
           )}

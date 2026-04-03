@@ -436,7 +436,9 @@ async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Check if accessibility permissions are granted on macOS using the proper API
+/// Check if accessibility permissions are granted on macOS using the proper API.
+/// Uses both AXIsProcessTrusted and AXIsProcessTrustedWithOptions for reliability —
+/// the latter can return stale results when code signatures change between builds.
 #[cfg(target_os = "macos")]
 fn check_accessibility_permissions(prompt: bool) -> bool {
     use core_foundation::base::TCFType;
@@ -446,6 +448,7 @@ fn check_accessibility_permissions(prompt: bool) -> bool {
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
+        fn AXIsProcessTrusted() -> bool;
         fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
     }
 
@@ -455,11 +458,21 @@ fn check_accessibility_permissions(prompt: bool) -> bool {
         let key = CFString::new("AXTrustedCheckOptionPrompt");
         let value = CFBoolean::true_value();
         let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
-        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
+        let result = unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) };
+        println!("[Dictato] AXIsProcessTrustedWithOptions(prompt=true) = {}", result);
+        result
     } else {
-        // Quick check without prompting - used during paste flow
+        // Try both APIs — AXIsProcessTrusted() can be more reliable than
+        // AXIsProcessTrustedWithOptions(null) in some macOS versions
+        let trusted_simple = unsafe { AXIsProcessTrusted() };
         let options = std::ptr::null();
-        unsafe { AXIsProcessTrustedWithOptions(options) }
+        let trusted_with_opts = unsafe { AXIsProcessTrustedWithOptions(options) };
+        println!(
+            "[Dictato] Accessibility check: AXIsProcessTrusted()={}, AXIsProcessTrustedWithOptions(null)={}",
+            trusted_simple, trusted_with_opts
+        );
+        // Return true if either check passes
+        trusted_simple || trusted_with_opts
     }
 }
 
@@ -564,39 +577,56 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
         return Ok(());
     }
 
-    // Check accessibility permissions first on macOS
+    // Log accessibility status for diagnostics (but don't gate on it — the check can
+    // return false even when the app actually has permission due to TCC/code-signing mismatches)
     #[cfg(target_os = "macos")]
     {
-        if !check_accessibility_permissions(false) {
-            println!("[Dictato] Accessibility permissions not granted. Text copied to clipboard - press Cmd+V to paste.");
-            println!("[Dictato] Grant permissions in System Settings → Privacy & Security → Accessibility");
-            return Ok(());
-        }
+        let trusted = check_accessibility_permissions(false);
+        println!("[Dictato] Accessibility check: trusted={}", trusted);
     }
 
     // Small delay to let clipboard propagate through the pasteboard system
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     // Run paste in a blocking task to avoid tokio runtime issues
+    // Try AppleScript first (more reliable in production/sandboxed builds),
+    // then fall back to CGEvent
     let paste_result = tokio::task::spawn_blocking(|| {
-        match perform_paste() {
-            Ok(()) => {
-                println!("[Dictato] Auto-pasted (CGEvent)");
-                Ok(())
-            }
-            #[cfg(target_os = "macos")]
-            Err(e) => {
-                println!("[Dictato] CGEvent paste failed: {}. Trying AppleScript fallback...", e);
-                match perform_paste_fallback() {
-                    Ok(()) => {
-                        println!("[Dictato] Auto-pasted (AppleScript fallback)");
-                        Ok(())
-                    }
-                    Err(e2) => Err(e2),
+        #[cfg(target_os = "macos")]
+        {
+            // Try AppleScript first — works via Automation permission (separate from Accessibility)
+            match perform_paste_fallback() {
+                Ok(()) => {
+                    println!("[Dictato] Auto-pasted (AppleScript)");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("[Dictato] AppleScript paste failed: {}. Trying CGEvent...", e);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            Err(e) => Err(e),
+
+            // Fall back to CGEvent (requires Accessibility permission)
+            match perform_paste() {
+                Ok(()) => {
+                    println!("[Dictato] Auto-pasted (CGEvent)");
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("[Dictato] CGEvent paste also failed: {}", e);
+                    Err(e)
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            match perform_paste() {
+                Ok(()) => {
+                    println!("[Dictato] Auto-pasted");
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
         }
     }).await;
 
