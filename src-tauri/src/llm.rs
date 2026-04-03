@@ -5,7 +5,7 @@ const LLM_TIMEOUT_SECS: u64 = 30;
 
 // OpenAI
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL: &str = "gpt-5.4-mini";
+const OPENAI_MODEL: &str = "gpt-5.4-nano";
 
 // Google Gemini
 const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
@@ -46,7 +46,7 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
-    max_tokens: u32,
+    max_completion_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -156,7 +156,7 @@ async fn call_openai_chat(
             },
         ],
         temperature: 0.3, // Low for consistency
-        max_tokens: 4096,
+        max_completion_tokens: 4096,
     };
 
     let client = reqwest::Client::builder()
@@ -420,7 +420,7 @@ pub async fn validate_openai_key(api_key: &str) -> Result<(), String> {
             content: "Hi".to_string(),
         }],
         temperature: 0.0,
-        max_tokens: 1,
+        max_completion_tokens: 1,
     };
 
     let client = reqwest::Client::builder()
