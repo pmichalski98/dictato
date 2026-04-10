@@ -33,6 +33,8 @@ export function Settings({
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    updatePurePasteEnabled,
+    updatePurePasteShortcut,
     updateActiveMode,
     toggleRule,
     addRule,
@@ -92,11 +94,15 @@ export function Settings({
           language={settings.language}
           microphoneDeviceId={settings.microphoneDeviceId}
           autoPaste={settings.autoPaste}
+          purePasteEnabled={settings.purePasteEnabled}
+          purePasteShortcut={settings.purePasteShortcut}
           shortcut={settings.shortcut}
           cancelShortcut={settings.cancelShortcut}
           onUpdateLanguage={updateLanguage}
           onUpdateMicrophoneDeviceId={updateMicrophoneDeviceId}
           onUpdateAutoPaste={updateAutoPaste}
+          onUpdatePurePasteEnabled={updatePurePasteEnabled}
+          onUpdatePurePasteShortcut={updatePurePasteShortcut}
           onUpdateShortcut={updateShortcut}
           onUpdateCancelShortcut={updateCancelShortcut}
         />

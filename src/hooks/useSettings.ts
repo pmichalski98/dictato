@@ -82,6 +82,8 @@ interface Settings {
   cancelShortcut: string;
   microphoneDeviceId: string;
   autoPaste: boolean;
+  purePasteEnabled: boolean;
+  purePasteShortcut: string;
   transcriptionRules: TranscriptionRule[];
   customModes: TranscriptionMode[];
   activeMode: string;
@@ -138,11 +140,19 @@ const DEFAULT_SETTINGS: Settings = {
   cancelShortcut: "Escape",
   microphoneDeviceId: "",
   autoPaste: true,
+  purePasteEnabled: false,
+  purePasteShortcut: "CommandOrControl+Shift+V",
   transcriptionRules: DEFAULT_RULES,
   customModes: [],
   activeMode: NONE_MODE_ID,
   deletedBuiltInModes: [],
 };
+
+function parseBoolSetting(raw: string | undefined | null, defaultValue: boolean): boolean {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return defaultValue;
+}
 
 const store = new LazyStore("settings.json");
 
@@ -164,6 +174,8 @@ export function useSettings() {
         const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
         const microphoneDeviceId = await store.get<string>(STORE_KEYS.MICROPHONE_DEVICE_ID);
         const autoPaste = await store.get<string>(STORE_KEYS.AUTO_PASTE);
+        const purePasteEnabled = await store.get<string>(STORE_KEYS.PURE_PASTE_ENABLED);
+        const purePasteShortcut = await store.get<string>(STORE_KEYS.PURE_PASTE_SHORTCUT);
         const transcriptionRulesJson = await store.get<string>(STORE_KEYS.TRANSCRIPTION_RULES);
         const customModesJson = await store.get<string>(STORE_KEYS.CUSTOM_MODES);
         const activeMode = await store.get<string>(STORE_KEYS.ACTIVE_MODE);
@@ -207,7 +219,9 @@ export function useSettings() {
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
-          autoPaste: autoPaste === "false" ? false : DEFAULT_SETTINGS.autoPaste,
+          autoPaste: parseBoolSetting(autoPaste, DEFAULT_SETTINGS.autoPaste),
+          purePasteEnabled: parseBoolSetting(purePasteEnabled, DEFAULT_SETTINGS.purePasteEnabled),
+          purePasteShortcut: purePasteShortcut ?? DEFAULT_SETTINGS.purePasteShortcut,
           transcriptionRules,
           customModes,
           activeMode: activeMode ?? DEFAULT_SETTINGS.activeMode,
@@ -319,6 +333,24 @@ export function useSettings() {
       setSettings((prev) => ({ ...prev, autoPaste }));
     } catch (err) {
       console.error("Failed to save auto-paste setting:", err);
+    }
+  }, []);
+
+  const updatePurePasteEnabled = useCallback(async (purePasteEnabled: boolean) => {
+    try {
+      await store.set(STORE_KEYS.PURE_PASTE_ENABLED, purePasteEnabled ? "true" : "false");
+      setSettings((prev) => ({ ...prev, purePasteEnabled }));
+    } catch (err) {
+      console.error("Failed to save pure paste setting:", err);
+    }
+  }, []);
+
+  const updatePurePasteShortcut = useCallback(async (purePasteShortcut: string) => {
+    try {
+      await store.set(STORE_KEYS.PURE_PASTE_SHORTCUT, purePasteShortcut);
+      setSettings((prev) => ({ ...prev, purePasteShortcut }));
+    } catch (err) {
+      console.error("Failed to save pure paste shortcut:", err);
     }
   }, []);
 
@@ -449,6 +481,8 @@ export function useSettings() {
     updateCancelShortcut,
     updateMicrophoneDeviceId,
     updateAutoPaste,
+    updatePurePasteEnabled,
+    updatePurePasteShortcut,
     updateActiveMode,
     updateTranscriptionRules,
     toggleRule,
