@@ -33,6 +33,8 @@ export const STORE_KEYS = {
   TRANSCRIBE_LANGUAGE: "transcribeLanguage",
   TRANSCRIBE_APPLY_RULES: "transcribeApplyRules",
   STT_PROVIDER: "sttProvider",
+  PURE_PASTE_ENABLED: "purePasteEnabled",
+  PURE_PASTE_SHORTCUT: "purePasteShortcut",
 } as const;
 
 export type StoreKey = (typeof STORE_KEYS)[keyof typeof STORE_KEYS];

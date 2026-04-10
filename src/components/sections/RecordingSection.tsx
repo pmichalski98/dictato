@@ -44,11 +44,15 @@ interface RecordingSectionProps {
   language: string;
   microphoneDeviceId: string;
   autoPaste: boolean;
+  purePasteEnabled: boolean;
+  purePasteShortcut: string;
   shortcut: string;
   cancelShortcut: string;
   onUpdateLanguage: (lang: string) => void;
   onUpdateMicrophoneDeviceId: (deviceId: string) => void;
   onUpdateAutoPaste: (enabled: boolean) => void;
+  onUpdatePurePasteEnabled: (enabled: boolean) => void;
+  onUpdatePurePasteShortcut: (shortcut: string) => void;
   onUpdateShortcut: (shortcut: string) => void;
   onUpdateCancelShortcut: (shortcut: string) => void;
 }
@@ -57,16 +61,21 @@ export function RecordingSection({
   language,
   microphoneDeviceId,
   autoPaste,
+  purePasteEnabled,
+  purePasteShortcut,
   shortcut,
   cancelShortcut,
   onUpdateLanguage,
   onUpdateMicrophoneDeviceId,
   onUpdateAutoPaste,
+  onUpdatePurePasteEnabled,
+  onUpdatePurePasteShortcut,
   onUpdateShortcut,
   onUpdateCancelShortcut,
 }: RecordingSectionProps) {
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [cancelShortcutError, setCancelShortcutError] = useState<string | null>(null);
+  const [purePasteShortcutError, setPurePasteShortcutError] = useState<string | null>(null);
   const [microphones, setMicrophones] = useState<AudioDevice[]>([]);
   const [micPermissionStatus, setMicPermissionStatus] = useState<
     "granted" | "denied" | "prompt" | "unknown"
@@ -157,6 +166,8 @@ export function RecordingSection({
     if (shortcut) {
       invoke("register_shortcut", { shortcutStr: shortcut }).catch(console.error);
     }
+    // re-register pure paste shortcut (unregister_shortcuts cleared it)
+    invoke("update_pure_paste_shortcut").catch(console.error);
   }, [shortcut]);
 
   const handleRecordingCaptureStart = useCallback(
@@ -169,34 +180,82 @@ export function RecordingSection({
     [handleCaptureStart]
   );
 
+  const showTemporaryError = useCallback(
+    (setter: (msg: string | null) => void, message: string) => {
+      setter(message);
+      setTimeout(() => setter(null), STATUS_RESET_DELAY_MS);
+    },
+    []
+  );
+
+  const validateShortcutConflicts = useCallback(
+    (
+      newShortcut: string,
+      conflicts: Array<{ value: string; label: string }>,
+      setError: (msg: string | null) => void,
+    ): boolean => {
+      if (BLOCKED_SHORTCUTS.includes(newShortcut as typeof BLOCKED_SHORTCUTS[number])) {
+        showTemporaryError(setError, "Conflicts with clipboard shortcuts (Ctrl+V/C/X)");
+        return false;
+      }
+      for (const { value, label } of conflicts) {
+        if (newShortcut === value) {
+          showTemporaryError(setError, `Same as ${label}`);
+          return false;
+        }
+      }
+      return true;
+    },
+    [showTemporaryError]
+  );
+
   const handleShortcutChange = useCallback(
     (newShortcut: string) => {
-      if (BLOCKED_SHORTCUTS.includes(newShortcut as typeof BLOCKED_SHORTCUTS[number])) {
-        setShortcutError("Conflicts with clipboard shortcuts (Ctrl+V/C/X)");
-        setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
-        return;
-      }
-      if (newShortcut === cancelShortcut) {
-        setShortcutError("Same as cancel shortcut");
-        setTimeout(() => setShortcutError(null), STATUS_RESET_DELAY_MS);
-        return;
-      }
+      if (!validateShortcutConflicts(newShortcut, [
+        { value: cancelShortcut, label: "cancel shortcut" },
+        { value: purePasteShortcut, label: "pure paste shortcut" },
+      ], setShortcutError)) return;
       onUpdateShortcut(newShortcut);
     },
-    [onUpdateShortcut, cancelShortcut]
+    [onUpdateShortcut, cancelShortcut, purePasteShortcut, validateShortcutConflicts]
   );
 
   const handleCancelShortcutChange = useCallback(
     (newShortcut: string) => {
-      if (newShortcut === shortcut) {
-        setCancelShortcutError("Same as recording shortcut");
-        setTimeout(() => setCancelShortcutError(null), STATUS_RESET_DELAY_MS);
-        return;
-      }
+      if (!validateShortcutConflicts(newShortcut, [
+        { value: shortcut, label: "recording shortcut" },
+        { value: purePasteShortcut, label: "pure paste shortcut" },
+      ], setCancelShortcutError)) return;
       onUpdateCancelShortcut(newShortcut);
       invoke("register_cancel_shortcut", { shortcutStr: newShortcut }).catch(console.error);
     },
-    [onUpdateCancelShortcut, shortcut]
+    [onUpdateCancelShortcut, shortcut, purePasteShortcut, validateShortcutConflicts]
+  );
+
+  const handlePurePasteEnabledChange = useCallback(
+    async (enabled: boolean | "indeterminate") => {
+      if (enabled === "indeterminate") return;
+      await onUpdatePurePasteEnabled(enabled);
+      invoke("update_pure_paste_shortcut").catch(console.error);
+    },
+    [onUpdatePurePasteEnabled]
+  );
+
+  const handlePurePasteShortcutChange = useCallback(
+    async (newShortcut: string) => {
+      if (!validateShortcutConflicts(newShortcut, [
+        { value: shortcut, label: "recording shortcut" },
+        { value: cancelShortcut, label: "cancel shortcut" },
+      ], setPurePasteShortcutError)) return;
+      await onUpdatePurePasteShortcut(newShortcut);
+      invoke("update_pure_paste_shortcut").catch(console.error);
+    },
+    [onUpdatePurePasteShortcut, shortcut, cancelShortcut, validateShortcutConflicts]
+  );
+
+  const handlePurePasteCaptureStart = useCallback(
+    () => handleCaptureStart(() => setPurePasteShortcutError(null)),
+    [handleCaptureStart]
   );
 
   return (
@@ -355,6 +414,36 @@ export function RecordingSection({
             placeholder="Click to set cancel shortcut"
           />
         </div>
+      </Card>
+
+      {/* Pure Paste Section */}
+      <Card className="space-y-3">
+        <div className="space-y-1.5">
+          <Label>Pure Paste</Label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={purePasteEnabled}
+              onCheckedChange={handlePurePasteEnabledChange}
+            />
+            <span className="text-[12px] text-muted-foreground">
+              Strip formatting and paste as plain text
+            </span>
+          </label>
+        </div>
+
+        {purePasteEnabled && (
+          <div className="space-y-1.5">
+            <Label>Pure Paste Shortcut</Label>
+            <ShortcutRecorder
+              value={purePasteShortcut}
+              onChange={handlePurePasteShortcutChange}
+              onCaptureStart={handlePurePasteCaptureStart}
+              onCaptureEnd={handleCaptureEnd}
+              error={purePasteShortcutError}
+              placeholder="Click to set pure paste shortcut"
+            />
+          </div>
+        )}
       </Card>
     </SectionLayout>
   );

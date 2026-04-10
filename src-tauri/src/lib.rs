@@ -9,8 +9,10 @@ use audio::{AudioCaptureHandle, AudioDevice};
 #[cfg(not(target_os = "macos"))]
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
+use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -29,6 +31,10 @@ const FLOATING_WINDOW_HEIGHT: f64 = 280.0;
 const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 
 // Audio processing constants
+
+// Clipboard propagation delay (ms) — macOS NSPasteboard doesn't propagate writes instantly;
+// pasting too soon after writing may read stale contents.
+const CLIPBOARD_PROPAGATION_DELAY_MS: u64 = 150;
 
 // Statistics calculation constants
 const AVERAGE_TYPING_WPM: f64 = 40.0; // Average typing speed for time-saved calculations
@@ -54,6 +60,8 @@ mod store_keys {
     pub const STATS_TOTAL_TRANSCRIPTIONS: &str = "statsTotalTranscriptions";
     pub const STATS_TOTAL_TIME_SAVED_SECONDS: &str = "statsTotalTimeSavedSeconds";
     pub const STT_PROVIDER: &str = "sttProvider";
+    pub const PURE_PASTE_ENABLED: &str = "purePasteEnabled";
+    pub const PURE_PASTE_SHORTCUT: &str = "purePasteShortcut";
 }
 
 // Built-in mode prompts
@@ -85,7 +93,11 @@ Transform the text into a professional email:
 
 NEVER change the message's intent. Output ONLY the formatted email."#;
 
+const DEFAULT_PURE_PASTE_SHORTCUT: &str = "CommandOrControl+Shift+V";
+
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
+static REGISTERED_PURE_PASTE_SHORTCUT: Lazy<Mutex<Option<String>>> =
+    Lazy::new(|| Mutex::new(None));
 
 pub struct AudioCaptureState {
     handle: AudioCaptureHandle,
@@ -558,6 +570,67 @@ fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
+/// Execute paste via the platform-appropriate method with fallback.
+/// `context` is a label for log messages (e.g. "Auto-paste", "Pure paste").
+async fn execute_paste(context: &str) {
+    let ctx = context.to_string();
+    let paste_result = tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        {
+            match perform_paste_fallback() {
+                Ok(()) => {
+                    println!("[Dictato] {} (AppleScript)", ctx);
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!(
+                        "[Dictato] {} AppleScript failed: {}. Trying CGEvent...",
+                        ctx, e
+                    );
+                }
+            }
+            match perform_paste() {
+                Ok(()) => {
+                    println!("[Dictato] {} (CGEvent)", ctx);
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("[Dictato] {} CGEvent also failed: {}", ctx, e);
+                    Err(e)
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            match perform_paste() {
+                Ok(()) => {
+                    println!("[Dictato] {}", ctx);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }
+    })
+    .await;
+
+    match paste_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            println!(
+                "[Dictato] {} failed: {}. Text is in clipboard - press Cmd+V to paste.",
+                context, e
+            );
+        }
+        Err(e) => {
+            println!(
+                "[Dictato] {} task failed: {:?}. Text is in clipboard - press Cmd+V to paste.",
+                context, e
+            );
+        }
+    }
+}
+
 #[tauri::command]
 async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     // Always copy to clipboard first
@@ -586,59 +659,9 @@ async fn copy_and_paste(app: AppHandle, text: String) -> Result<(), String> {
     }
 
     // Small delay to let clipboard propagate through the pasteboard system
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(CLIPBOARD_PROPAGATION_DELAY_MS)).await;
 
-    // Run paste in a blocking task to avoid tokio runtime issues
-    // Try AppleScript first (more reliable in production/sandboxed builds),
-    // then fall back to CGEvent
-    let paste_result = tokio::task::spawn_blocking(|| {
-        #[cfg(target_os = "macos")]
-        {
-            // Try AppleScript first — works via Automation permission (separate from Accessibility)
-            match perform_paste_fallback() {
-                Ok(()) => {
-                    println!("[Dictato] Auto-pasted (AppleScript)");
-                    return Ok(());
-                }
-                Err(e) => {
-                    println!("[Dictato] AppleScript paste failed: {}. Trying CGEvent...", e);
-                }
-            }
-
-            // Fall back to CGEvent (requires Accessibility permission)
-            match perform_paste() {
-                Ok(()) => {
-                    println!("[Dictato] Auto-pasted (CGEvent)");
-                    Ok(())
-                }
-                Err(e) => {
-                    println!("[Dictato] CGEvent paste also failed: {}", e);
-                    Err(e)
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            match perform_paste() {
-                Ok(()) => {
-                    println!("[Dictato] Auto-pasted");
-                    Ok(())
-                }
-                Err(e) => Err(e),
-            }
-        }
-    }).await;
-
-    match paste_result {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            println!("[Dictato] Auto-paste failed: {}. Text is in clipboard - press Cmd+V to paste.", e);
-        }
-        Err(e) => {
-            println!("[Dictato] Auto-paste task failed: {:?}. Text is in clipboard - press Cmd+V to paste.", e);
-        }
-    }
+    execute_paste("Auto-paste").await;
 
     Ok(())
 }
@@ -706,6 +729,9 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
             });
         })
         .map_err(|e| e.to_string())?;
+
+    // Also re-register the pure paste shortcut (since unregister_all() cleared it)
+    register_pure_paste_shortcut_internal(&app).ok();
 
     Ok(())
 }
@@ -864,6 +890,91 @@ fn get_mode_prompt_from_store(app: &AppHandle, mode_id: &str) -> Option<String> 
     }
 
     None
+}
+
+fn get_pure_paste_shortcut_from_store(app: &AppHandle) -> String {
+    get_store_string(app, store_keys::PURE_PASTE_SHORTCUT)
+        .unwrap_or_else(|| DEFAULT_PURE_PASTE_SHORTCUT.to_string())
+}
+
+fn is_pure_paste_enabled(app: &AppHandle) -> bool {
+    get_store_string(app, store_keys::PURE_PASTE_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
+async fn pure_paste(app: AppHandle) -> Result<(), String> {
+    let text = match app.clipboard().read_text() {
+        Ok(t) if !t.is_empty() => t,
+        _ => {
+            println!("[Dictato] Pure paste: clipboard empty or non-text, no-op");
+            return Ok(());
+        }
+    };
+
+    // Re-write as plain text only (strips rich formatting representations)
+    app.clipboard()
+        .write_text(&text)
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "[Dictato] Pure paste: wrote plain text back to clipboard ({} chars)",
+        text.len()
+    );
+
+    // Small delay to let clipboard propagate through the pasteboard system
+    tokio::time::sleep(std::time::Duration::from_millis(CLIPBOARD_PROPAGATION_DELAY_MS)).await;
+
+    execute_paste("Pure paste").await;
+
+    Ok(())
+}
+
+/// Atomically unregister the old pure-paste shortcut and (if enabled) register
+/// the current one.  Holds the mutex across both operations to prevent races.
+fn register_pure_paste_shortcut_internal(app: &AppHandle) -> Result<(), String> {
+    let mut guard = REGISTERED_PURE_PASTE_SHORTCUT
+        .lock()
+        .map_err(|e| format!("Mutex poisoned: {}", e))?;
+
+    // Unregister the previous shortcut if any
+    if let Some(ref old_str) = *guard {
+        if let Ok(old) = old_str.parse::<Shortcut>() {
+            app.global_shortcut().unregister(old).ok();
+        }
+    }
+    *guard = None;
+
+    if !is_pure_paste_enabled(app) {
+        return Ok(());
+    }
+
+    let shortcut_str = get_pure_paste_shortcut_from_store(app);
+    let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("{:?}", e))?;
+
+    let app_clone = app.clone();
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            let app = app_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = pure_paste(app).await {
+                    eprintln!("Pure paste failed: {}", e);
+                }
+            });
+        })
+        .map_err(|e| e.to_string())?;
+
+    *guard = Some(shortcut_str);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_pure_paste_shortcut(app: AppHandle) -> Result<(), String> {
+    register_pure_paste_shortcut_internal(&app)
 }
 
 #[tauri::command]
@@ -1533,6 +1644,7 @@ pub fn run() {
             register_shortcut,
             register_cancel_shortcut,
             unregister_shortcuts,
+            update_pure_paste_shortcut,
             get_recording_state,
             list_audio_devices,
             save_floating_position,
@@ -1560,6 +1672,9 @@ pub fn run() {
 
             setup_tray(app.handle())?;
             create_floating_window(app.handle()).ok();
+
+            // Register pure paste shortcut on startup (if previously enabled)
+            register_pure_paste_shortcut_internal(app.handle()).ok();
 
             // Check STT provider and show settings if needed
             let stt_provider = get_stt_provider_from_store(app.handle());
