@@ -1,5 +1,6 @@
 mod audio;
 mod groq;
+mod keyboard_lock;
 mod llm;
 mod parakeet;
 mod transcribe;
@@ -1494,6 +1495,105 @@ fn create_floating_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+const CLEANING_GRACE_MS: u64 = 3_000;
+const CLEANING_GRACE_TICK_MS: u64 = 50;
+
+fn create_cleaning_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("cleaning") {
+        window.show().ok();
+        window.set_focus().ok();
+        return Ok(());
+    }
+
+    let (width, height) = {
+        if let Some(monitor) = app
+            .get_webview_window("main")
+            .and_then(|w| w.primary_monitor().ok().flatten())
+        {
+            let scale = monitor.scale_factor();
+            (
+                monitor.size().width as f64 / scale,
+                monitor.size().height as f64 / scale,
+            )
+        } else {
+            (1440.0, 900.0)
+        }
+    };
+
+    let builder =
+        WebviewWindowBuilder::new(app, "cleaning", WebviewUrl::App("/?window=cleaning".into()))
+            .title("Cleaning Mode")
+            .inner_size(width, height)
+            .position(0.0, 0.0)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .focused(true)
+            .visible(true);
+
+    builder.build().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn close_cleaning_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("cleaning") {
+        window.close().ok();
+    }
+}
+
+#[tauri::command]
+async fn engage_cleaning_mode(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if !check_accessibility_permissions(true) {
+            return Err("Accessibility permission required. Grant it in System Settings → Privacy & Security → Accessibility, then try again.".into());
+        }
+    }
+
+    create_cleaning_window(&app)?;
+
+    // Grace countdown: user lifts hands before the tap engages.
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let start = std::time::Instant::now();
+        let total = std::time::Duration::from_millis(CLEANING_GRACE_MS);
+        loop {
+            let elapsed = start.elapsed();
+            let pct = ((elapsed.as_millis() as u64 * 100) / CLEANING_GRACE_MS).min(100) as u32;
+            app_clone.emit("cleaning-grace-progress", pct).ok();
+            if elapsed >= total {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(CLEANING_GRACE_TICK_MS)).await;
+        }
+
+        let state = app_clone.state::<keyboard_lock::LockState>();
+        if let Err(e) = keyboard_lock::engage(app_clone.clone(), &state) {
+            eprintln!("[CleaningMode] Failed to engage: {e}");
+            app_clone.emit("cleaning-mode-error", e).ok();
+            close_cleaning_window(&app_clone);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn close_cleaning_overlay(
+    app: AppHandle,
+    state: tauri::State<'_, keyboard_lock::LockState>,
+) -> Result<(), String> {
+    keyboard_lock::disengage(&state);
+    close_cleaning_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_cleaning_mode_state(state: tauri::State<'_, keyboard_lock::LockState>) -> bool {
+    keyboard_lock::is_active(&state)
+}
+
 fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("floating") {
         window.show().ok();
@@ -1574,8 +1674,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+    let cleaning_item = MenuItem::with_id(
+        app,
+        "cleaning_mode",
+        "Start Cleaning Mode",
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &cleaning_item, &quit_item])?;
 
     let _ = TrayIconBuilder::new()
         .icon(icon)
@@ -1595,6 +1702,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 show_main_window(app);
+            }
+            "cleaning_mode" => {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = engage_cleaning_mode(app_handle.clone()).await {
+                        eprintln!("[CleaningMode] Tray activation failed: {e}");
+                        app_handle.emit("cleaning-mode-error", e).ok();
+                    }
+                });
             }
             "quit" => {
                 app.exit(0);
@@ -1634,6 +1750,7 @@ pub fn run() {
         .manage(AudioCaptureState::default())
         .manage(parakeet::ParakeetState::default())
         .manage(whisper::WhisperState::default())
+        .manage(keyboard_lock::LockState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -1664,6 +1781,9 @@ pub fn run() {
             get_whisper_model_status,
             download_whisper_model,
             delete_whisper_model,
+            engage_cleaning_mode,
+            get_cleaning_mode_state,
+            close_cleaning_overlay,
         ])
         .setup(|app| {
             // Hide app from macOS dock (stealth mode - tray icon only)
@@ -1785,6 +1905,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
                 show_main_window(app);
+            }
+            RunEvent::Exit => {
+                let state = app.state::<keyboard_lock::LockState>();
+                keyboard_lock::disengage(&state);
             }
             _ => {}
         });

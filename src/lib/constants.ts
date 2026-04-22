@@ -53,6 +53,20 @@ export const EVENTS = {
   PARAKEET_LOADING: "parakeet-loading",
   WHISPER_DOWNLOAD_PROGRESS: "whisper-download-progress",
   WHISPER_LOADING: "whisper-loading",
+  CLEANING_GRACE_PROGRESS: "cleaning-grace-progress",
+  CLEANING_MODE_ERROR: "cleaning-mode-error",
+  KEYBOARD_LOCK_CHANGED: "keyboard-lock-changed",
+  KEYBOARD_UNLOCK_PROGRESS: "keyboard-unlock-progress",
+} as const;
+
+/**
+ * Cleaning Mode timing. Backend mirrors these in src-tauri/src/keyboard_lock.rs
+ * (UNLOCK_DURATION_MS) and src-tauri/src/lib.rs (CLEANING_GRACE_MS).
+ */
+export const CLEANING = {
+  GRACE_SECONDS: 3,
+  UNLOCK_SECONDS: 3,
+  ERROR_AUTO_CLOSE_MS: 4000,
 } as const;
 
 /**

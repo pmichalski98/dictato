@@ -6,7 +6,8 @@ export type Section =
   | "rules"
   | "transcribe"
   | "dictionary"
-  | "history";
+  | "history"
+  | "cleaning";
 
 export interface NavigationItem {
   id: Section;

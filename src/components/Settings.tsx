@@ -7,6 +7,7 @@ import { RulesSection } from "./sections/RulesSection";
 import { TranscribeSection } from "./sections/TranscribeSection";
 import { DictionarySection } from "./sections/DictionarySection";
 import { HistorySection } from "./sections/HistorySection";
+import { CleaningModeSection } from "./sections/CleaningModeSection";
 
 interface SettingsProps {
   updateAvailable?: boolean;
@@ -137,6 +138,10 @@ export function Settings({
 
       <div className={activeSection === "history" ? "block" : "hidden"}>
         <HistorySection />
+      </div>
+
+      <div className={activeSection === "cleaning" ? "block" : "hidden"}>
+        <CleaningModeSection />
       </div>
     </AppLayout>
   );
