@@ -8,6 +8,7 @@ import {
   PanelLeftClose,
   PanelLeft,
   FileAudio,
+  Lock,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ const navigationItems: NavigationItem[] = [
   { id: "transcribe", label: "Transcribe", icon: FileAudio },
   { id: "dictionary", label: "Dictionary", icon: BookText },
   { id: "history", label: "History", icon: Clock },
+  { id: "cleaning", label: "Cleaning Mode", icon: Lock },
 ];
 
 interface SidebarProps {
