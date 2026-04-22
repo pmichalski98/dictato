@@ -74,7 +74,10 @@ pub fn disengage(state: &LockState) {
 
         #[cfg(target_os = "macos")]
         {
-            let rl = h.run_loop.load(Ordering::SeqCst);
+            // Swap-to-null: whoever wins the swap is the sole caller that
+            // stops the loop. Prevents a second call on a freed CFRunLoop
+            // after the tap thread has already exited (auto-unlock path).
+            let rl = h.run_loop.swap(std::ptr::null_mut(), Ordering::SeqCst);
             if !rl.is_null() {
                 unsafe { mac::CFRunLoopStop(rl) };
             }
@@ -383,7 +386,7 @@ mod mac {
 
                     if progress >= 100 {
                         poll_active.store(false, Ordering::SeqCst);
-                        let rl = poll_run_loop.load(Ordering::SeqCst);
+                        let rl = poll_run_loop.swap(ptr::null_mut(), Ordering::SeqCst);
                         if !rl.is_null() {
                             unsafe { CFRunLoopStop(rl) };
                         }
