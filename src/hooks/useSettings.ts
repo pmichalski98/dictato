@@ -36,19 +36,28 @@ export const LLM_PROVIDERS = {
   openai: {
     id: "openai" as const,
     name: "OpenAI",
-    model: "GPT-5.4 Mini",
+    /** Fallback model id — must match DEFAULT_OPENAI_MODEL in src-tauri/src/llm.rs */
+    defaultModel: "gpt-5.4-nano",
   },
   google: {
     id: "google" as const,
     name: "Google",
-    model: "Gemini 3.1 Flash Lite",
+    /** Fallback model id — must match DEFAULT_GOOGLE_MODEL in src-tauri/src/llm.rs */
+    defaultModel: "gemini-3.1-flash-lite-preview",
   },
   anthropic: {
     id: "anthropic" as const,
     name: "Anthropic",
-    model: "Claude 4.5 Haiku",
+    /** Fallback model id — must match DEFAULT_ANTHROPIC_MODEL in src-tauri/src/llm.rs */
+    defaultModel: "claude-haiku-4-5",
   },
 } as const;
+
+/** A selectable chat model returned by the `list_llm_models` Tauri command */
+export interface LlmModelInfo {
+  id: string;
+  display_name: string;
+}
 
 export interface TranscriptionRule {
   id: string;
@@ -77,6 +86,8 @@ interface Settings {
   googleApiKey: string;
   anthropicApiKey: string;
   llmProvider: LlmProvider;
+  /** Selected model per provider (model id as reported by the provider's API) */
+  llmModels: Record<LlmProvider, string>;
   language: string;
   shortcut: string;
   cancelShortcut: string;
@@ -135,6 +146,11 @@ const DEFAULT_SETTINGS: Settings = {
   googleApiKey: "",
   anthropicApiKey: "",
   llmProvider: "openai",
+  llmModels: {
+    openai: LLM_PROVIDERS.openai.defaultModel,
+    google: LLM_PROVIDERS.google.defaultModel,
+    anthropic: LLM_PROVIDERS.anthropic.defaultModel,
+  },
   language: "en",
   shortcut: "CommandOrControl+Shift+Space",
   cancelShortcut: "Escape",
@@ -156,6 +172,12 @@ function parseBoolSetting(raw: string | undefined | null, defaultValue: boolean)
 
 const store = new LazyStore("settings.json");
 
+const LLM_MODEL_STORE_KEYS: Record<LlmProvider, string> = {
+  openai: STORE_KEYS.OPENAI_MODEL,
+  google: STORE_KEYS.GOOGLE_MODEL,
+  anthropic: STORE_KEYS.ANTHROPIC_MODEL,
+};
+
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
@@ -169,6 +191,9 @@ export function useSettings() {
         const googleApiKey = await store.get<string>(STORE_KEYS.GOOGLE_API_KEY);
         const anthropicApiKey = await store.get<string>(STORE_KEYS.ANTHROPIC_API_KEY);
         const llmProvider = await store.get<string>(STORE_KEYS.LLM_PROVIDER);
+        const openaiModel = await store.get<string>(STORE_KEYS.OPENAI_MODEL);
+        const googleModel = await store.get<string>(STORE_KEYS.GOOGLE_MODEL);
+        const anthropicModel = await store.get<string>(STORE_KEYS.ANTHROPIC_MODEL);
         const language = await store.get<string>(STORE_KEYS.LANGUAGE);
         const shortcut = await store.get<string>(STORE_KEYS.SHORTCUT);
         const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
@@ -215,6 +240,11 @@ export function useSettings() {
           googleApiKey: googleApiKey ?? DEFAULT_SETTINGS.googleApiKey,
           anthropicApiKey: anthropicApiKey ?? DEFAULT_SETTINGS.anthropicApiKey,
           llmProvider: (llmProvider as LlmProvider) ?? DEFAULT_SETTINGS.llmProvider,
+          llmModels: {
+            openai: openaiModel || DEFAULT_SETTINGS.llmModels.openai,
+            google: googleModel || DEFAULT_SETTINGS.llmModels.google,
+            anthropic: anthropicModel || DEFAULT_SETTINGS.llmModels.anthropic,
+          },
           language: language ?? DEFAULT_SETTINGS.language,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
@@ -297,6 +327,18 @@ export function useSettings() {
       setSettings((prev) => ({ ...prev, anthropicApiKey }));
     } catch (err) {
       console.error("Failed to save Anthropic API key:", err);
+    }
+  }, []);
+
+  const updateLlmModel = useCallback(async (provider: LlmProvider, model: string) => {
+    try {
+      await store.set(LLM_MODEL_STORE_KEYS[provider], model);
+      setSettings((prev) => ({
+        ...prev,
+        llmModels: { ...prev.llmModels, [provider]: model },
+      }));
+    } catch (err) {
+      console.error("Failed to save LLM model:", err);
     }
   }, []);
 
@@ -476,6 +518,7 @@ export function useSettings() {
     updateGoogleApiKey,
     updateAnthropicApiKey,
     updateLlmProvider,
+    updateLlmModel,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,

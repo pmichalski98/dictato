@@ -51,6 +51,9 @@ mod store_keys {
     pub const OPENAI_API_KEY: &str = "openaiApiKey";
     pub const GOOGLE_API_KEY: &str = "googleApiKey";
     pub const ANTHROPIC_API_KEY: &str = "anthropicApiKey";
+    pub const OPENAI_MODEL: &str = "openaiModel";
+    pub const GOOGLE_MODEL: &str = "googleModel";
+    pub const ANTHROPIC_MODEL: &str = "anthropicModel";
     pub const LLM_PROVIDER: &str = "llmProvider";
     pub const LANGUAGE: &str = "language";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
@@ -217,6 +220,7 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     let stt_provider = get_stt_provider_from_store(&app);
     let llm_provider = get_llm_provider_from_store(&app);
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
+    let llm_model = get_llm_model_for_provider(&app, &llm_provider);
     let language = get_language_from_store(&app);
     let transcript = if audio_data.is_empty() {
         println!("[Dictato] Skipping transcription: audio buffer empty");
@@ -302,7 +306,7 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
                 // Check for LLM API key
                 if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying mode...").ok();
-                    match llm::process_with_prompt(&llm_provider, llm_key, &transcript, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &transcript, &prompt).await {
                         Ok(processed) => {
                             println!("[Dictato] Mode '{}' applied successfully using {}", mode_id, provider_name);
                             processed
@@ -332,7 +336,7 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
                 // Check for LLM API key
                 if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying rules...").ok();
-                    match llm::process_with_rules(&llm_provider, llm_key, &transcript, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &transcript, rules).await {
                         Ok(processed) => {
                             println!("[Dictato] Rules applied successfully using {}", provider_name);
                             processed
@@ -825,6 +829,18 @@ fn get_llm_api_key_for_provider(app: &AppHandle, provider: &llm::LlmProvider) ->
     }
 }
 
+/// Get the user-selected model for a provider, falling back to the provider default
+fn get_llm_model_for_provider(app: &AppHandle, provider: &llm::LlmProvider) -> String {
+    let key = match provider {
+        llm::LlmProvider::OpenAI => store_keys::OPENAI_MODEL,
+        llm::LlmProvider::Google => store_keys::GOOGLE_MODEL,
+        llm::LlmProvider::Anthropic => store_keys::ANTHROPIC_MODEL,
+    };
+    get_store_string(app, key)
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| llm::default_model(provider).to_string())
+}
+
 /// Get the display name for an LLM provider
 fn get_llm_provider_name(provider: &llm::LlmProvider) -> &'static str {
     match provider {
@@ -1008,7 +1024,25 @@ async fn generate_mode_prompt(app: AppHandle, name: String, description: String)
     let provider_name = get_llm_provider_name(&provider);
     let api_key = get_llm_api_key_for_provider(&app, &provider)
         .ok_or_else(|| format!("{} API key required for prompt generation. Add it in Settings.", provider_name))?;
-    llm::generate_mode_prompt(&provider, &api_key, &name, &description).await
+    let model = get_llm_model_for_provider(&app, &provider);
+    llm::generate_mode_prompt(&provider, &api_key, &model, &name, &description).await
+}
+
+/// List selectable chat models for a provider, fetched live from its API.
+/// Uses the API key stored in settings for that provider.
+#[tauri::command]
+async fn list_llm_models(app: AppHandle, provider: String) -> Result<Vec<llm::ModelInfo>, String> {
+    let provider = match provider.as_str() {
+        "openai" => llm::LlmProvider::OpenAI,
+        "google" => llm::LlmProvider::Google,
+        "anthropic" => llm::LlmProvider::Anthropic,
+        other => return Err(format!("Unknown LLM provider: {}", other)),
+    };
+    let provider_name = get_llm_provider_name(&provider);
+    let api_key = get_llm_api_key_for_provider(&app, &provider)
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| format!("{} API key required to list models. Add it in Settings.", provider_name))?;
+    llm::list_models(&provider, &api_key).await
 }
 
 // ============== API Key Validation commands ==============
@@ -1228,6 +1262,7 @@ async fn transcribe_file(
     let stt_provider = get_stt_provider_from_store(&app);
     let llm_provider = get_llm_provider_from_store(&app);
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
+    let llm_model = get_llm_model_for_provider(&app, &llm_provider);
 
     emit_transcribe_progress(&app, progress_stages::PREPARING, progress_percent::PREPARING, "Preparing file...");
 
@@ -1321,7 +1356,7 @@ async fn transcribe_file(
                 if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying mode...");
 
-                    match llm::process_with_prompt(&llm_provider, llm_key, &raw_text, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &raw_text, &prompt).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -1338,7 +1373,7 @@ async fn transcribe_file(
                 if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying rules...");
 
-                    match llm::process_with_rules(&llm_provider, llm_key, &raw_text, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &raw_text, rules).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -1766,6 +1801,7 @@ pub fn run() {
             list_audio_devices,
             save_floating_position,
             generate_mode_prompt,
+            list_llm_models,
             validate_groq_key,
             validate_openai_key,
             validate_google_key,

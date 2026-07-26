@@ -29,6 +29,7 @@ export function Settings({
     updateGoogleApiKey,
     updateAnthropicApiKey,
     updateLlmProvider,
+    updateLlmModel,
     updateLanguage,
     updateShortcut,
     updateCancelShortcut,
@@ -81,12 +82,14 @@ export function Settings({
           googleApiKey={settings.googleApiKey}
           anthropicApiKey={settings.anthropicApiKey}
           llmProvider={settings.llmProvider}
+          llmModels={settings.llmModels}
           onUpdateSttProvider={updateSttProvider}
           onSaveGroqApiKey={updateGroqApiKey}
           onSaveOpenaiApiKey={updateOpenaiApiKey}
           onSaveGoogleApiKey={updateGoogleApiKey}
           onSaveAnthropicApiKey={updateAnthropicApiKey}
           onUpdateLlmProvider={updateLlmProvider}
+          onUpdateLlmModel={updateLlmModel}
         />
       </div>
 

@@ -5,14 +5,17 @@ const LLM_TIMEOUT_SECS: u64 = 30;
 
 // OpenAI
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL: &str = "gpt-5.4-nano";
+const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4-nano";
 
 // Google Gemini
-const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
+const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+pub const DEFAULT_GOOGLE_MODEL: &str = "gemini-3.1-flash-lite-preview";
 
 // Anthropic
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL: &str = "claude-haiku-4-5";
+const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-haiku-4-5";
 const ANTHROPIC_VERSION: &str = "2023-06-01"; // API protocol version
 
 /// LLM provider for text processing
@@ -23,6 +26,15 @@ pub enum LlmProvider {
     OpenAI,
     Google,
     Anthropic,
+}
+
+/// Fallback model used when the user hasn't picked one (or the store is empty)
+pub fn default_model(provider: &LlmProvider) -> &'static str {
+    match provider {
+        LlmProvider::OpenAI => DEFAULT_OPENAI_MODEL,
+        LlmProvider::Google => DEFAULT_GOOGLE_MODEL,
+        LlmProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,11 +152,12 @@ struct AnthropicResponse {
 /// Call OpenAI chat API
 async fn call_openai_chat(
     api_key: &str,
+    model: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
     let request = ChatRequest {
-        model: OPENAI_MODEL.to_string(),
+        model: model.to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -194,6 +207,7 @@ async fn call_openai_chat(
 /// Call Google Gemini API
 async fn call_google_chat(
     api_key: &str,
+    model: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
@@ -216,7 +230,7 @@ async fn call_google_chat(
         },
     };
 
-    let url = format!("{}?key={}", GOOGLE_API_URL, api_key);
+    let url = format!("{}/{}:generateContent?key={}", GOOGLE_API_BASE, model, api_key);
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(LLM_TIMEOUT_SECS))
@@ -253,11 +267,12 @@ async fn call_google_chat(
 /// Call Anthropic Claude API
 async fn call_anthropic_chat(
     api_key: &str,
+    model: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
     let request = AnthropicRequest {
-        model: ANTHROPIC_MODEL.to_string(),
+        model: model.to_string(),
         max_tokens: 4096,
         system: system_prompt.to_string(),
         messages: vec![AnthropicMessage {
@@ -303,13 +318,16 @@ async fn call_anthropic_chat(
 pub async fn call_llm_chat(
     provider: &LlmProvider,
     api_key: &str,
+    model: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
     match provider {
-        LlmProvider::OpenAI => call_openai_chat(api_key, system_prompt, user_content).await,
-        LlmProvider::Google => call_google_chat(api_key, system_prompt, user_content).await,
-        LlmProvider::Anthropic => call_anthropic_chat(api_key, system_prompt, user_content).await,
+        LlmProvider::OpenAI => call_openai_chat(api_key, model, system_prompt, user_content).await,
+        LlmProvider::Google => call_google_chat(api_key, model, system_prompt, user_content).await,
+        LlmProvider::Anthropic => {
+            call_anthropic_chat(api_key, model, system_prompt, user_content).await
+        }
     }
 }
 
@@ -317,6 +335,7 @@ pub async fn call_llm_chat(
 pub async fn process_with_rules(
     provider: &LlmProvider,
     api_key: &str,
+    model: &str,
     transcript: &str,
     rules: Vec<TranscriptionRule>,
 ) -> Result<String, String> {
@@ -351,13 +370,14 @@ Output ONLY the formatted text with no explanations."#,
         rules_text
     );
 
-    call_llm_chat(provider, api_key, &system_prompt, transcript).await
+    call_llm_chat(provider, api_key, model, &system_prompt, transcript).await
 }
 
 /// Process transcript with a custom system prompt
 pub async fn process_with_prompt(
     provider: &LlmProvider,
     api_key: &str,
+    model: &str,
     transcript: &str,
     prompt: &str,
 ) -> Result<String, String> {
@@ -365,7 +385,7 @@ pub async fn process_with_prompt(
         return Ok(transcript.to_string());
     }
 
-    call_llm_chat(provider, api_key, prompt, transcript).await
+    call_llm_chat(provider, api_key, model, prompt, transcript).await
 }
 
 /// System prompt for the meta-prompt generator
@@ -393,6 +413,7 @@ Generate the system prompt now:"#;
 pub async fn generate_mode_prompt(
     provider: &LlmProvider,
     api_key: &str,
+    model: &str,
     name: &str,
     description: &str,
 ) -> Result<String, String> {
@@ -400,7 +421,7 @@ pub async fn generate_mode_prompt(
         .replace("{name}", name)
         .replace("{description}", description);
 
-    call_llm_chat(provider, api_key, PROMPT_GENERATOR_SYSTEM, &user_content).await
+    call_llm_chat(provider, api_key, model, PROMPT_GENERATOR_SYSTEM, &user_content).await
 }
 
 // ===== API Key Validation =====
@@ -414,7 +435,7 @@ pub async fn validate_openai_key(api_key: &str) -> Result<(), String> {
     }
 
     let request = ChatRequest {
-        model: OPENAI_MODEL.to_string(),
+        model: DEFAULT_OPENAI_MODEL.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: "Hi".to_string(),
@@ -472,7 +493,10 @@ pub async fn validate_google_key(api_key: &str) -> Result<(), String> {
         },
     };
 
-    let url = format!("{}?key={}", GOOGLE_API_URL, api_key);
+    let url = format!(
+        "{}/{}:generateContent?key={}",
+        GOOGLE_API_BASE, DEFAULT_GOOGLE_MODEL, api_key
+    );
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
@@ -503,6 +527,203 @@ pub async fn validate_google_key(api_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ===== Live Model Listing =====
+
+/// A selectable chat model, as reported by the provider's list-models API
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelEntry {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct GeminiModelsResponse {
+    models: Vec<GeminiModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct GeminiModelEntry {
+    /// Fully-qualified name, e.g. "models/gemini-3.1-flash-lite-preview"
+    name: String,
+    #[serde(rename = "displayName", default)]
+    display_name: String,
+    #[serde(rename = "supportedGenerationMethods", default)]
+    supported_generation_methods: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicModelsResponse {
+    data: Vec<AnthropicModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicModelEntry {
+    id: String,
+    #[serde(default)]
+    display_name: String,
+}
+
+fn models_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(VALIDATION_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))
+}
+
+async fn read_success_body(response: reqwest::Response, provider: &str) -> Result<String, String> {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("{} models API error {}: {}", provider, status, body));
+    }
+    Ok(body)
+}
+
+/// OpenAI's /v1/models returns every model type (embeddings, TTS, image, ...);
+/// keep only chat-completions-capable model families
+fn is_openai_chat_model(id: &str) -> bool {
+    let is_gpt = id.starts_with("gpt-");
+    let is_o_series = id.starts_with('o')
+        && id
+            .chars()
+            .nth(1)
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false);
+    if !is_gpt && !is_o_series {
+        return false;
+    }
+    const NON_CHAT_MARKERS: &[&str] = &[
+        "audio",
+        "realtime",
+        "tts",
+        "transcribe",
+        "whisper",
+        "embedding",
+        "moderation",
+        "image",
+        "dall-e",
+        "instruct",
+        "search",
+        "computer-use",
+        "codex",
+    ];
+    !NON_CHAT_MARKERS.iter().any(|m| id.contains(m))
+}
+
+async fn list_openai_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let response = models_client()?
+        .get(OPENAI_MODELS_URL)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI models request failed: {}", e))?;
+
+    let body = read_success_body(response, "OpenAI").await?;
+    let result: OpenAiModelsResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse OpenAI models response: {}", e))?;
+
+    let mut models: Vec<ModelInfo> = result
+        .data
+        .into_iter()
+        .filter(|m| is_openai_chat_model(&m.id))
+        .map(|m| ModelInfo {
+            display_name: m.id.clone(),
+            id: m.id,
+        })
+        .collect();
+    // Newest families sort last alphabetically within a prefix; descending puts them on top
+    models.sort_by(|a, b| b.id.cmp(&a.id));
+    Ok(models)
+}
+
+async fn list_google_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = format!("{}?key={}&pageSize=1000", GOOGLE_API_BASE, api_key);
+    let response = models_client()?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini models request failed: {}", e))?;
+
+    let body = read_success_body(response, "Gemini").await?;
+    let result: GeminiModelsResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Gemini models response: {}", e))?;
+
+    let mut models: Vec<ModelInfo> = result
+        .models
+        .into_iter()
+        .filter(|m| {
+            m.supported_generation_methods
+                .iter()
+                .any(|method| method == "generateContent")
+        })
+        .map(|m| {
+            let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+            let display_name = if m.display_name.is_empty() {
+                id.clone()
+            } else {
+                m.display_name
+            };
+            ModelInfo { id, display_name }
+        })
+        .collect();
+    models.sort_by(|a, b| b.id.cmp(&a.id));
+    Ok(models)
+}
+
+async fn list_anthropic_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = format!("{}?limit=100", ANTHROPIC_MODELS_URL);
+    let response = models_client()?
+        .get(&url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .send()
+        .await
+        .map_err(|e| format!("Anthropic models request failed: {}", e))?;
+
+    let body = read_success_body(response, "Anthropic").await?;
+    let result: AnthropicModelsResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Anthropic models response: {}", e))?;
+
+    // Already sorted newest-first by the API; every entry is a chat model
+    Ok(result
+        .data
+        .into_iter()
+        .map(|m| {
+            let display_name = if m.display_name.is_empty() {
+                m.id.clone()
+            } else {
+                m.display_name
+            };
+            ModelInfo {
+                id: m.id,
+                display_name,
+            }
+        })
+        .collect())
+}
+
+/// Fetch the list of selectable chat models live from the provider
+pub async fn list_models(
+    provider: &LlmProvider,
+    api_key: &str,
+) -> Result<Vec<ModelInfo>, String> {
+    match provider {
+        LlmProvider::OpenAI => list_openai_models(api_key).await,
+        LlmProvider::Google => list_google_models(api_key).await,
+        LlmProvider::Anthropic => list_anthropic_models(api_key).await,
+    }
+}
+
 /// Validate an Anthropic API key by making a minimal request
 pub async fn validate_anthropic_key(api_key: &str) -> Result<(), String> {
     if api_key.trim().is_empty() {
@@ -510,7 +731,7 @@ pub async fn validate_anthropic_key(api_key: &str) -> Result<(), String> {
     }
 
     let request = AnthropicRequest {
-        model: ANTHROPIC_MODEL.to_string(),
+        model: DEFAULT_ANTHROPIC_MODEL.to_string(),
         max_tokens: 1,
         system: "Be brief.".to_string(),
         messages: vec![AnthropicMessage {

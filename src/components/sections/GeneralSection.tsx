@@ -25,6 +25,7 @@ import { Switch } from "../ui/switch";
 import {
   LLM_PROVIDERS,
   STT_PROVIDERS,
+  type LlmModelInfo,
   type LlmProvider,
   type SttProvider,
 } from "@/hooks/useSettings";
@@ -629,12 +630,14 @@ interface GeneralSectionProps {
   googleApiKey: string;
   anthropicApiKey: string;
   llmProvider: LlmProvider;
+  llmModels: Record<LlmProvider, string>;
   onUpdateSttProvider: (provider: SttProvider) => Promise<void>;
   onSaveGroqApiKey: (key: string) => Promise<void>;
   onSaveOpenaiApiKey: (key: string) => Promise<void>;
   onSaveGoogleApiKey: (key: string) => Promise<void>;
   onSaveAnthropicApiKey: (key: string) => Promise<void>;
   onUpdateLlmProvider: (provider: LlmProvider) => Promise<void>;
+  onUpdateLlmModel: (provider: LlmProvider, model: string) => Promise<void>;
 }
 
 export function GeneralSection({
@@ -644,16 +647,68 @@ export function GeneralSection({
   googleApiKey,
   anthropicApiKey,
   llmProvider,
+  llmModels,
   onUpdateSttProvider,
   onSaveGroqApiKey,
   onSaveOpenaiApiKey,
   onSaveGoogleApiKey,
   onSaveAnthropicApiKey,
   onUpdateLlmProvider,
+  onUpdateLlmModel,
 }: GeneralSectionProps) {
   const hasOpenaiKey = !!openaiApiKey;
   const hasGoogleKey = !!googleApiKey;
   const hasAnthropicKey = !!anthropicApiKey;
+
+  const hasActiveProviderKey =
+    llmProvider === "openai"
+      ? hasOpenaiKey
+      : llmProvider === "google"
+      ? hasGoogleKey
+      : hasAnthropicKey;
+
+  const selectedModel = llmModels[llmProvider];
+
+  // Model list fetched live from the active provider's API
+  const [availableModels, setAvailableModels] = useState<LlmModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAvailableModels([]);
+    setModelsError(null);
+    if (!hasActiveProviderKey) return;
+
+    setModelsLoading(true);
+    invoke<LlmModelInfo[]>("list_llm_models", { provider: llmProvider })
+      .then((models) => {
+        if (!cancelled) setAvailableModels(models);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Failed to fetch models:", err);
+          setModelsError(typeof err === "string" ? err : "Failed to fetch models");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [llmProvider, hasActiveProviderKey]);
+
+  // Keep the saved model selectable even if it's missing from the fetched list
+  // (e.g. a deprecated model or a fetch that returned a partial list)
+  const modelOptions =
+    availableModels.some((m) => m.id === selectedModel) || !selectedModel
+      ? availableModels
+      : [{ id: selectedModel, display_name: selectedModel }, ...availableModels];
+
+  const selectedModelLabel =
+    availableModels.find((m) => m.id === selectedModel)?.display_name ?? selectedModel;
 
   // Autostart state (Windows only)
   const [isWindows, setIsWindows] = useState(false);
@@ -777,7 +832,7 @@ export function GeneralSection({
                   value={provider.id}
                   disabled={!hasKey}
                 >
-                  {provider.name} ({provider.model})
+                  {provider.name}
                   {!hasKey ? " — Add key below" : ""}
                 </option>
               );
@@ -785,12 +840,41 @@ export function GeneralSection({
           </Select>
         </div>
 
+        <div className="space-y-1.5">
+          <Label>Model</Label>
+          <p className="text-[11px] text-muted-foreground">
+            Models are fetched live from {LLM_PROVIDERS[llmProvider].name}
+          </p>
+          <Select
+            value={selectedModel}
+            disabled={modelsLoading || !hasActiveProviderKey}
+            onChange={(e) => onUpdateLlmModel(llmProvider, e.target.value)}
+          >
+            {modelsLoading ? (
+              <option value={selectedModel}>Loading models...</option>
+            ) : modelOptions.length > 0 ? (
+              modelOptions.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name}
+                </option>
+              ))
+            ) : (
+              <option value={selectedModel}>{selectedModel}</option>
+            )}
+          </Select>
+          {modelsError && (
+            <p className="text-[11px] text-destructive">
+              Could not fetch models — using {selectedModel}. {modelsError}
+            </p>
+          )}
+        </div>
+
         <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
           <span className="text-[11px] text-muted-foreground">
             Using{" "}
             <span className="text-foreground font-medium">
-              {LLM_PROVIDERS[llmProvider].model}
+              {selectedModelLabel}
             </span>{" "}
             for text processing
           </span>
@@ -799,7 +883,7 @@ export function GeneralSection({
 
       <ApiKeyCard
         label="OpenAI API Key"
-        description="Used for GPT-4.1 Mini AI processing"
+        description="Unlocks OpenAI GPT models for AI processing"
         placeholder="sk-..."
         linkUrl="https://platform.openai.com/api-keys"
         linkText="platform.openai.com"
@@ -810,7 +894,7 @@ export function GeneralSection({
 
       <ApiKeyCard
         label="Google API Key"
-        description="Used for Gemini 2.0 Flash AI processing"
+        description="Unlocks Google Gemini models for AI processing"
         placeholder="AIza..."
         linkUrl="https://aistudio.google.com/apikey"
         linkText="aistudio.google.com"
@@ -821,7 +905,7 @@ export function GeneralSection({
 
       <ApiKeyCard
         label="Anthropic API Key"
-        description="Used for Claude 4.5 Haiku AI processing"
+        description="Unlocks Anthropic Claude models for AI processing"
         placeholder="sk-ant-..."
         linkUrl="https://console.anthropic.com/settings/keys"
         linkText="console.anthropic.com"
