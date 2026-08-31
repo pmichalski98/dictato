@@ -28,7 +28,10 @@ use tauri_plugin_store::StoreExt;
 
 // Floating window constants
 const FLOATING_WINDOW_WIDTH: f64 = 320.0;
-const FLOATING_WINDOW_HEIGHT: f64 = 280.0;
+// Compact default; the frontend resizes the window to fit the visible pill
+// (and expands it while the mode dropdown is open) so the transparent area
+// doesn't block clicks on windows underneath.
+const FLOATING_WINDOW_HEIGHT: f64 = 140.0;
 const FLOATING_WINDOW_DEFAULT_Y: f64 = 8.0;
 
 // Audio processing constants
@@ -1019,6 +1022,33 @@ fn save_floating_position(app: AppHandle, x: f64, y: f64) {
 }
 
 #[tauri::command]
+fn resize_floating_window(app: AppHandle, width: f64, height: f64) {
+    if let Some(window) = app.get_webview_window("floating") {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        // Keep the horizontal center fixed so the pill doesn't shift when its
+        // content width changes (e.g. bars -> processing spinner).
+        let recentered = window
+            .outer_position()
+            .ok()
+            .zip(window.outer_size().ok())
+            .map(|(pos, size)| {
+                let old_width = size.width as f64 / scale;
+                let x = pos.x as f64 / scale + (old_width - width) / 2.0;
+                let y = pos.y as f64 / scale;
+                (x, y)
+            });
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }))
+            .ok();
+        if let Some((x, y)) = recentered {
+            window
+                .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
+                .ok();
+        }
+    }
+}
+
+#[tauri::command]
 async fn generate_mode_prompt(app: AppHandle, name: String, description: String) -> Result<String, String> {
     let provider = get_llm_provider_from_store(&app);
     let provider_name = get_llm_provider_name(&provider);
@@ -1800,6 +1830,7 @@ pub fn run() {
             get_recording_state,
             list_audio_devices,
             save_floating_position,
+            resize_floating_window,
             generate_mode_prompt,
             list_llm_models,
             validate_groq_key,

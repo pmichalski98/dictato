@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { ListChecks } from "lucide-react";
 import { formatShortcut } from "@/lib/shortcuts";
 import { STORE_KEYS } from "@/lib/storeKeys";
 import { getVisibleModes, NONE_MODE_ID } from "@/lib/modes";
+import { Button } from "@/components/ui/button";
 import { CheckIcon } from "@/components/ui/icons";
 import { ModeIcon } from "@/components/IconPicker";
 import {
@@ -18,6 +20,12 @@ import {
 import { TranscriptionRule, TranscriptionMode } from "@/hooks/useSettings";
 
 const store = new LazyStore("settings.json");
+
+// Window sizing constants. The OS treats every window pixel as a click target
+// even when fully transparent, so the window must shrink-wrap the visible pill
+// or it blocks clicks/drags on whatever is underneath.
+const WINDOW_SHADOW_MARGIN = 16; // Transparent margin around the pill so its CSS shadow can render
+const EXPANDED_WINDOW_HEIGHT = 280; // Extra room below the pill while the mode dropdown is open
 
 // Audio visualization constants
 const BAR_COUNT = 48;
@@ -54,6 +62,10 @@ export function FloatingWindow() {
   const [activeMode, setActiveMode] = useState<string>(NONE_MODE_ID);
   const [customModes, setCustomModes] = useState<TranscriptionMode[]>([]);
   const [deletedBuiltInModes, setDeletedBuiltInModes] = useState<string[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Measured pill element, used to shrink-wrap the OS window around it
+  const pillRef = useRef<HTMLDivElement>(null);
 
   // Ref to store previous bar heights for smooth animation
   const prevBarHeightsRef = useRef<number[]>(
@@ -234,6 +246,7 @@ export function FloatingWindow() {
         } else {
           resetBars();
           setIsProcessing(false);
+          setMenuOpen(false);
         }
       }
     );
@@ -277,6 +290,31 @@ export function FloatingWindow() {
     };
   }, [loadModeAndRules, updateBarsFromLevel, resetBars]);
 
+  // Resize the OS window to hug the visible pill so the transparent area
+  // around it doesn't intercept clicks meant for windows underneath. While
+  // the mode dropdown is open, expand downward to give it room.
+  useEffect(() => {
+    if (!isActive) return;
+    const pill = pillRef.current;
+    if (!pill) return;
+
+    const resizeWindow = () => {
+      const rect = pill.getBoundingClientRect();
+      const width = Math.ceil(rect.width) + WINDOW_SHADOW_MARGIN * 2;
+      const height = menuOpen
+        ? EXPANDED_WINDOW_HEIGHT
+        : Math.ceil(rect.height) + WINDOW_SHADOW_MARGIN * 2;
+      invoke("resize_floating_window", { width, height }).catch((err) => {
+        console.error("Failed to resize floating window:", err);
+      });
+    };
+
+    resizeWindow();
+    const observer = new ResizeObserver(resizeWindow);
+    observer.observe(pill);
+    return () => observer.disconnect();
+  }, [isActive, menuOpen]);
+
   const currentMode = allModes.find((m) => m.id === activeMode);
 
   if (!isActive) {
@@ -285,26 +323,32 @@ export function FloatingWindow() {
 
   return (
     <>
-      <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden">
+      <div className="w-full h-full flex items-start justify-center bg-transparent select-none overflow-hidden p-4">
         <div
+          ref={pillRef}
           data-tauri-drag-region
-          className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in cursor-move"
+          className="flex flex-col items-center gap-2 px-5 py-3 bg-linear-to-b from-zinc-800/95 to-zinc-900/95 rounded-2xl shadow-[0_6px_16px_rgba(0,0,0,0.4)] backdrop-blur-xl animate-fade-in cursor-move"
         >
           {/* Main status area */}
-          <div className="flex items-center justify-center min-h-[36px] gap-3">
+          <div
+            data-tauri-drag-region
+            className="flex items-center justify-center min-h-[36px] gap-3"
+          >
             {/* Options dropdown - show mode selector */}
             {!isProcessing && !error && (
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={setMenuOpen}>
                 <DropdownMenuTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className={`
-                      flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200
+                      rounded-lg transition-all duration-200
                       ${
                         activeMode !== NONE_MODE_ID
-                          ? "bg-violet-500/30 text-violet-300"
+                          ? "bg-violet-500/30 text-violet-300 hover:bg-violet-500/40 hover:text-violet-300"
                           : hasEnabledRules && !skipRules
-                            ? "bg-blue-500/30 text-blue-300"
-                            : "bg-zinc-600/30 text-zinc-400"
+                            ? "bg-blue-500/30 text-blue-300 hover:bg-blue-500/40 hover:text-blue-300"
+                            : "bg-zinc-600/30 text-zinc-400 hover:bg-zinc-600/40 hover:text-zinc-400"
                       }
                     `}
                     title={activeMode === NONE_MODE_ID && hasEnabledRules && !skipRules ? "Default Rules" : currentMode?.name ?? "None"}
@@ -316,7 +360,7 @@ export function FloatingWindow() {
                     ) : (
                       <ModeIcon icon="Circle" size={16} />
                     )}
-                  </button>
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="bottom">
                   <DropdownMenuLabel>Mode</DropdownMenuLabel>
@@ -379,16 +423,18 @@ export function FloatingWindow() {
             )}
 
             {isProcessing ? (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 pointer-events-none">
                 <div className="w-4 h-4 border-2 border-violet-400/30 border-t-violet-400 rounded-full animate-spin" />
                 <span className="text-sm text-white/70 font-medium">
                   {processingMessage}
                 </span>
               </div>
             ) : error ? (
-              <span className="text-sm text-red-400 font-medium">{error}</span>
+              <span className="text-sm text-red-400 font-medium pointer-events-none">
+                {error}
+              </span>
             ) : (
-              <div className="flex items-center gap-[2px] h-12">
+              <div className="flex items-center gap-[2px] h-12 pointer-events-none">
                 {barHeights.map((height, i) => (
                   <div
                     key={i}
@@ -402,7 +448,7 @@ export function FloatingWindow() {
 
           {/* Hints row */}
           {!isProcessing && !error && (
-            <div className="flex items-center gap-4 text-[11px] text-white/40">
+            <div className="flex items-center gap-4 text-[11px] text-white/40 pointer-events-none">
               <span className="flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-white/60 font-mono">
                   {formatShortcut(cancelShortcut)}
