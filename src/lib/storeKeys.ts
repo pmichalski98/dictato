@@ -38,6 +38,8 @@ export const STORE_KEYS = {
   STT_PROVIDER: "sttProvider",
   PURE_PASTE_ENABLED: "purePasteEnabled",
   PURE_PASTE_SHORTCUT: "purePasteShortcut",
+  DICTIONARY_WORDS: "dictionaryWords",
+  DICTATION_HISTORY: "dictationHistory",
 } as const;
 
 export type StoreKey = (typeof STORE_KEYS)[keyof typeof STORE_KEYS];

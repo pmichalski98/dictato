@@ -78,7 +78,12 @@ fn create_wav_header(data_len: u32, sample_rate: u32, channels: u16, bits_per_sa
     header
 }
 
-pub async fn transcribe(api_key: &str, audio_data: Vec<u8>, language: &str) -> Result<String, String> {
+pub async fn transcribe(
+    api_key: &str,
+    audio_data: Vec<u8>,
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
     if audio_data.is_empty() {
         return Ok(String::new());
     }
@@ -100,6 +105,12 @@ pub async fn transcribe(api_key: &str, audio_data: Vec<u8>, language: &str) -> R
     // Only include language if not auto-detect (empty or "auto" means auto-detect)
     if !language.is_empty() && language != "auto" {
         form = form.text("language", language.to_string());
+    }
+
+    // Whisper conditions its decoder on the prompt, biasing it toward the
+    // user's vocabulary (technical terms, product names)
+    if let Some(prompt) = vocabulary_prompt.filter(|p| !p.is_empty()) {
+        form = form.text("prompt", prompt.to_string());
     }
 
     let client = reqwest::Client::builder()
@@ -144,7 +155,12 @@ fn get_mime_type(extension: &str) -> &'static str {
 
 /// Transcribe audio from a file path
 /// Supports: mp3, wav, m4a, ogg, flac, webm
-pub async fn transcribe_file(api_key: &str, file_path: &Path, language: &str) -> Result<String, String> {
+pub async fn transcribe_file(
+    api_key: &str,
+    file_path: &Path,
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
     // Get file name and extension for mime type (before reading file)
     let file_name = file_path
         .file_name()
@@ -203,6 +219,10 @@ pub async fn transcribe_file(api_key: &str, file_path: &Path, language: &str) ->
         // Only include language if not auto-detect
         if !language.is_empty() && language != "auto" {
             form = form.text("language", language.to_string());
+        }
+
+        if let Some(prompt) = vocabulary_prompt.filter(|p| !p.is_empty()) {
+            form = form.text("prompt", prompt.to_string());
         }
 
         match client

@@ -69,7 +69,11 @@ mod store_keys {
     pub const STT_PROVIDER: &str = "sttProvider";
     pub const PURE_PASTE_ENABLED: &str = "purePasteEnabled";
     pub const PURE_PASTE_SHORTCUT: &str = "purePasteShortcut";
+    pub const DICTIONARY_WORDS: &str = "dictionaryWords";
+    pub const DICTATION_HISTORY: &str = "dictationHistory";
 }
+
+const MAX_DICTATION_HISTORY: usize = 50;
 
 // Built-in mode prompts
 const VIBE_CODING_PROMPT: &str = r#"You are a concise text formatter for coding assistant input.
@@ -225,6 +229,8 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
     let llm_model = get_llm_model_for_provider(&app, &llm_provider);
     let language = get_language_from_store(&app);
+    let dictionary = get_dictionary_from_store(&app);
+    let vocabulary_prompt = build_vocabulary_prompt(&dictionary);
     let transcript = if audio_data.is_empty() {
         println!("[Dictato] Skipping transcription: audio buffer empty");
         String::new()
@@ -258,8 +264,9 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         let whisper_state = app.state::<whisper::WhisperState>();
         let state_clone = whisper_state.inner().clone();
         let lang = language.clone();
+        let vocab = vocabulary_prompt.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_pcm16(&state_clone, audio_data, &lang);
+            let r = whisper::transcribe_pcm16(&state_clone, audio_data, &lang, vocab.as_deref());
             parakeet::set_transcribing(false);
             r
         })
@@ -283,7 +290,9 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         } else {
             println!("[Dictato] Sending {} bytes to Groq API", audio_data.len());
             app.emit("processing-state", true).ok();
-            let result = groq::transcribe(&groq_api_key, audio_data, &language).await;
+            let result =
+                groq::transcribe(&groq_api_key, audio_data, &language, vocabulary_prompt.as_deref())
+                    .await;
             match result {
                 Ok(text) => text,
                 Err(e) => {
@@ -297,6 +306,10 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     // Apply mode transformation or rules (modes take priority over rules)
     // Uses the selected LLM provider for processing
     let mut had_llm_error = false;
+    // What produced the final text, recorded in dictation history
+    let mut processing_kind = "none";
+    let mut processing_label: Option<String> = None;
+    let raw_transcript = transcript.clone();
     let provider_name = get_llm_provider_name(&llm_provider);
     let final_text = if !transcript.is_empty() {
         let skip_rules = should_skip_rules(&app);
@@ -309,9 +322,11 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
                 // Check for LLM API key
                 if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying mode...").ok();
-                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &transcript, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &transcript, &prompt, &language, &dictionary).await {
                         Ok(processed) => {
                             println!("[Dictato] Mode '{}' applied successfully using {}", mode_id, provider_name);
+                            processing_kind = "mode";
+                            processing_label = Some(get_mode_name_from_store(&app, &mode_id));
                             processed
                         }
                         Err(e) => {
@@ -339,9 +354,10 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
                 // Check for LLM API key
                 if let Some(ref llm_key) = llm_api_key {
                     app.emit("processing-message", "Applying rules...").ok();
-                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &transcript, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &transcript, rules, &language, &dictionary).await {
                         Ok(processed) => {
                             println!("[Dictato] Rules applied successfully using {}", provider_name);
+                            processing_kind = "rules";
                             processed
                         }
                         Err(e) => {
@@ -366,6 +382,16 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     };
 
     app.emit("processing-state", false).ok();
+
+    if !raw_transcript.is_empty() {
+        add_dictation_to_history(
+            &app,
+            &raw_transcript,
+            &final_text,
+            processing_kind,
+            processing_label.as_deref(),
+        );
+    }
 
     // Don't collapse window if there was an LLM error - let show_error handle it
     if !had_llm_error {
@@ -867,6 +893,26 @@ fn get_cancel_shortcut_from_store(app: &AppHandle) -> String {
     get_store_string(app, store_keys::CANCEL_SHORTCUT).unwrap_or_else(|| "Escape".to_string())
 }
 
+fn get_dictionary_from_store(app: &AppHandle) -> Vec<String> {
+    get_store_string(app, store_keys::DICTIONARY_WORDS)
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| w.trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Comma-separated glossary passed as Whisper's prompt: the decoder conditions
+/// on it as preceding context, making these spellings more probable.
+fn build_vocabulary_prompt(dictionary: &[String]) -> Option<String> {
+    if dictionary.is_empty() {
+        None
+    } else {
+        Some(format!("Glossary: {}.", dictionary.join(", ")))
+    }
+}
+
 fn get_transcription_rules_from_store(app: &AppHandle) -> Vec<llm::TranscriptionRule> {
     get_store_string(app, store_keys::TRANSCRIPTION_RULES)
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -887,6 +933,8 @@ fn get_active_mode_from_store(app: &AppHandle) -> Option<String> {
 struct CustomMode {
     id: String,
     prompt: String,
+    #[serde(default)]
+    name: String,
 }
 
 /// Get the prompt for the active mode (built-in or custom)
@@ -910,6 +958,70 @@ fn get_mode_prompt_from_store(app: &AppHandle, mode_id: &str) -> Option<String> 
     }
 
     None
+}
+
+/// Display name for a mode, used to label dictation history entries
+fn get_mode_name_from_store(app: &AppHandle, mode_id: &str) -> String {
+    match mode_id {
+        "vibe-coding" => return "Vibe Coding".to_string(),
+        "professional-email" => return "Professional Email".to_string(),
+        _ => {}
+    }
+
+    get_store_string(app, store_keys::CUSTOM_MODES)
+        .and_then(|s| serde_json::from_str::<Vec<CustomMode>>(&s).ok())
+        .and_then(|modes| {
+            modes
+                .iter()
+                .find(|m| m.id == mode_id)
+                .map(|m| m.name.clone())
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| mode_id.to_string())
+}
+
+/// Append a voice dictation to the persisted history (raw vs processed text),
+/// newest first, capped at MAX_DICTATION_HISTORY entries.
+fn add_dictation_to_history(
+    app: &AppHandle,
+    raw_text: &str,
+    processed_text: &str,
+    kind: &str,
+    label: Option<&str>,
+) {
+    let Ok(store) = app.store("settings.json") else {
+        return;
+    };
+
+    let mut history: Vec<serde_json::Value> = store
+        .get(store_keys::DICTATION_HISTORY)
+        .and_then(|v| v.as_str().map(String::from))
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    history.insert(
+        0,
+        serde_json::json!({
+            "id": format!("dictation-{}", timestamp),
+            "timestamp": timestamp,
+            "rawText": raw_text,
+            "processedText": processed_text,
+            "kind": kind,
+            "label": label,
+        }),
+    );
+    history.truncate(MAX_DICTATION_HISTORY);
+
+    if let Ok(json) = serde_json::to_string(&history) {
+        store.set(store_keys::DICTATION_HISTORY, serde_json::json!(json));
+        store.save().ok();
+        app.emit("dictation-history-updated", ()).ok();
+    }
 }
 
 fn get_pure_paste_shortcut_from_store(app: &AppHandle) -> String {
@@ -1293,6 +1405,8 @@ async fn transcribe_file(
     let llm_provider = get_llm_provider_from_store(&app);
     let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
     let llm_model = get_llm_model_for_provider(&app, &llm_provider);
+    let dictionary = get_dictionary_from_store(&app);
+    let vocabulary_prompt = build_vocabulary_prompt(&dictionary);
 
     emit_transcribe_progress(&app, progress_stages::PREPARING, progress_percent::PREPARING, "Preparing file...");
 
@@ -1340,9 +1454,10 @@ async fn transcribe_file(
         let state_clone = whisper_state.inner().clone();
         let audio_path_clone = audio_path.clone();
         let lang = language.clone();
+        let vocab = vocabulary_prompt.clone();
 
         let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone, &lang);
+            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone, &lang, vocab.as_deref());
             parakeet::set_transcribing(false);
             r
         })
@@ -1367,7 +1482,7 @@ async fn transcribe_file(
                 let progress = progress_percent::TRANSCRIBE_START + ((i as f32 / total_chunks as f32) * 50.0) as u32;
                 emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress, "Transcribing audio...");
 
-                let chunk_text = groq::transcribe_file(&groq_api_key, chunk_path, &language).await?;
+                let chunk_text = groq::transcribe_file(&groq_api_key, chunk_path, &language, vocabulary_prompt.as_deref()).await?;
                 transcripts.push(chunk_text);
             }
 
@@ -1375,7 +1490,7 @@ async fn transcribe_file(
         } else {
             emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing audio...");
 
-            groq::transcribe_file(&groq_api_key, &audio_path, &language).await?
+            groq::transcribe_file(&groq_api_key, &audio_path, &language, vocabulary_prompt.as_deref()).await?
         }
     };
 
@@ -1386,7 +1501,7 @@ async fn transcribe_file(
                 if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying mode...");
 
-                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &raw_text, &prompt).await {
+                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &raw_text, &prompt, &language, &dictionary).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -1403,7 +1518,7 @@ async fn transcribe_file(
                 if let Some(ref llm_key) = llm_api_key {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying rules...");
 
-                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &raw_text, rules).await {
+                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &raw_text, rules, &language, &dictionary).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }

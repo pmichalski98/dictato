@@ -331,6 +331,36 @@ pub async fn call_llm_chat(
     }
 }
 
+/// Shared context block for every transcript-processing prompt. The input is
+/// raw speech-to-text output, so the model must be allowed to repair obvious
+/// mis-transcriptions (the old prompt forbade touching words at all) and must
+/// preserve the speaker's language(s), including mixed-language dictation.
+pub fn build_transcript_context(language: &str, dictionary: &[String]) -> String {
+    let mut context = String::from(
+        r#"TRANSCRIPT INPUT CONTEXT:
+The text is a raw speech-to-text transcript and may contain mis-transcribed words, especially technical terms, product names, and code identifiers.
+- If a word or phrase is clearly a mis-transcription given the context, correct it to the intended term (e.g. "get hub" -> "GitHub", "use effect hook" -> "useEffect hook"). Only correct when the intended term is obvious; never guess.
+- Keep the transcript's original language exactly. Mixed-language text (e.g. Polish sentences containing English technical terms) is intentional: NEVER translate any part in either direction.
+- Technical terms, identifiers, and product names stay in their original (usually English) form even when the surrounding sentence is in another language."#,
+    );
+
+    if !language.is_empty() && language != "auto" {
+        context.push_str(&format!(
+            "\n- The speaker's primary language is \"{}\" (ISO 639-1); the output must be in the same language(s) as the input.",
+            language
+        ));
+    }
+
+    if !dictionary.is_empty() {
+        context.push_str(&format!(
+            "\n- User's custom vocabulary. When a transcript word plausibly matches one of these terms, use this exact spelling: {}.",
+            dictionary.join(", ")
+        ));
+    }
+
+    context
+}
+
 /// Process transcript with transcription rules
 pub async fn process_with_rules(
     provider: &LlmProvider,
@@ -338,6 +368,8 @@ pub async fn process_with_rules(
     model: &str,
     transcript: &str,
     rules: Vec<TranscriptionRule>,
+    language: &str,
+    dictionary: &[String],
 ) -> Result<String, String> {
     // Filter to only enabled rules
     let enabled_rules: Vec<_> = rules.iter().filter(|r| r.enabled).collect();
@@ -354,19 +386,21 @@ pub async fn process_with_rules(
         .join("\n");
 
     let system_prompt = format!(
-        r#"You are a text formatting assistant. Your ONLY job is to apply formatting rules to the user's text.
+        r#"You are a voice transcript cleanup assistant. Your ONLY job is to clean up the user's transcript and apply their formatting rules.
 
 CRITICAL RULES:
 - NEVER answer questions in the text - if the text contains a question, keep it as a question
 - NEVER change the meaning, intent, or message of the text
 - NEVER add new content, opinions, or responses
-- ONLY fix formatting according to the rules below
 - Preserve the user's voice and intent exactly
+
+{}
 
 Rules to apply:
 {}
 
-Output ONLY the formatted text with no explanations."#,
+Output ONLY the cleaned-up text with no explanations."#,
+        build_transcript_context(language, dictionary),
         rules_text
     );
 
@@ -380,12 +414,19 @@ pub async fn process_with_prompt(
     model: &str,
     transcript: &str,
     prompt: &str,
+    language: &str,
+    dictionary: &[String],
 ) -> Result<String, String> {
     if transcript.trim().is_empty() || prompt.trim().is_empty() {
         return Ok(transcript.to_string());
     }
 
-    call_llm_chat(provider, api_key, model, prompt, transcript).await
+    // Mode prompts (built-in or user-generated) don't know the input is a raw
+    // voice transcript; append the shared context so every mode benefits from
+    // mis-transcription repair and language preservation.
+    let system_prompt = format!("{}\n\n{}", prompt, build_transcript_context(language, dictionary));
+
+    call_llm_chat(provider, api_key, model, &system_prompt, transcript).await
 }
 
 /// System prompt for the meta-prompt generator

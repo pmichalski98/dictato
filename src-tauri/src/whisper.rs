@@ -196,7 +196,12 @@ pub fn is_model_loaded(state: &WhisperState) -> bool {
     state.model.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
-pub fn transcribe_pcm16(state: &WhisperState, pcm16_24khz: Vec<u8>, language: &str) -> Result<String, String> {
+pub fn transcribe_pcm16(
+    state: &WhisperState,
+    pcm16_24khz: Vec<u8>,
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
     let mut model_guard = state.lock_model();
     let ctx = model_guard
         .as_mut()
@@ -224,10 +229,15 @@ pub fn transcribe_pcm16(state: &WhisperState, pcm16_24khz: Vec<u8>, language: &s
         WHISPER_SAMPLE_RATE
     );
 
-    run_whisper_inference(ctx, &samples, language)
+    run_whisper_inference(ctx, &samples, language, vocabulary_prompt)
 }
 
-pub fn transcribe_file_local(state: &WhisperState, file_path: &Path, language: &str) -> Result<String, String> {
+pub fn transcribe_file_local(
+    state: &WhisperState,
+    file_path: &Path,
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
     let mut model_guard = state.lock_model();
     let ctx = model_guard
         .as_mut()
@@ -239,7 +249,7 @@ pub fn transcribe_file_local(state: &WhisperState, file_path: &Path, language: &
     // The file has already been converted to a suitable format by the transcribe pipeline
     let samples = read_audio_file_as_f32(file_path)?;
 
-    run_whisper_inference(ctx, &samples, language)
+    run_whisper_inference(ctx, &samples, language, vocabulary_prompt)
 }
 
 /// Read an audio file (WAV format from ffmpeg pipeline) and return f32 samples at 16kHz mono.
@@ -330,7 +340,12 @@ fn read_audio_file_as_f32(file_path: &Path) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-fn run_whisper_inference(ctx: &mut WhisperContext, samples: &[f32], language: &str) -> Result<String, String> {
+fn run_whisper_inference(
+    ctx: &mut WhisperContext,
+    samples: &[f32],
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_print_special(false);
     params.set_print_progress(false);
@@ -359,6 +374,15 @@ fn run_whisper_inference(ctx: &mut WhisperContext, samples: &[f32], language: &s
 
     // No cross-segment context carryover needed for dictation
     params.set_no_context(true);
+
+    // Bias the decoder toward the user's vocabulary (technical terms, names).
+    // CString panics on null bytes, so strip them defensively.
+    let sanitized_prompt = vocabulary_prompt
+        .filter(|p| !p.is_empty())
+        .map(|p| p.replace('\0', ""));
+    if let Some(ref prompt) = sanitized_prompt {
+        params.set_initial_prompt(prompt);
+    }
 
     // Create a new state for this inference
     let mut state = ctx
