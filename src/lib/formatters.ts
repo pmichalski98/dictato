@@ -40,6 +40,16 @@ export function formatRelativeDate(timestamp: number): string {
 }
 
 /**
+ * Format a byte count for display, e.g. 1536 -> "1.5 KB", 3.1e9 -> "3.1 GB"
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
  * Truncate a string to a maximum length with ellipsis
  */
 export function truncateString(str: string, maxLength: number): string {

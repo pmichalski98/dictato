@@ -9,6 +9,7 @@ import {
   PanelLeft,
   FileAudio,
   Lock,
+  HardDrive,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ import { Button } from "@/components/ui/button";
 
 const navigationItems: NavigationItem[] = [
   { id: "general", label: "General", icon: Settings2 },
+  { id: "models", label: "Models", icon: HardDrive },
   { id: "recording", label: "Recording", icon: Mic },
   { id: "rules", label: "Rules & Modes", icon: Sparkles },
   { id: "transcribe", label: "Transcribe", icon: FileAudio },

@@ -2,7 +2,8 @@ mod audio;
 mod groq;
 mod keyboard_lock;
 mod llm;
-mod parakeet;
+mod local_audio;
+mod models;
 mod transcribe;
 mod whisper;
 
@@ -10,6 +11,7 @@ use audio::{AudioCaptureHandle, AudioDevice};
 #[cfg(not(target_os = "macos"))]
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
+use models::{LocalModel, SttProvider};
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -234,47 +236,25 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     let transcript = if audio_data.is_empty() {
         println!("[Dictato] Skipping transcription: audio buffer empty");
         String::new()
-    } else if stt_provider == parakeet::SttProvider::Parakeet {
-        println!("[Dictato] Transcribing {} bytes locally with Parakeet", audio_data.len());
+    } else if let Some(model) = stt_provider.local_model() {
+        println!(
+            "[Dictato] Transcribing {} bytes locally with {}",
+            audio_data.len(),
+            model.name()
+        );
         app.emit("processing-state", true).ok();
-        parakeet::set_transcribing(true);
-        let parakeet_state = app.state::<parakeet::ParakeetState>();
-        let state_clone = parakeet_state.inner().clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let r = parakeet::transcribe_pcm16(&state_clone, audio_data);
-            parakeet::set_transcribing(false);
-            r
-        })
-        .await
-        .map_err(|e| {
-            parakeet::set_transcribing(false);
-            format!("Transcription task failed: {}", e)
-        })?;
-        match result {
-            Ok(text) => text,
-            Err(e) => {
-                app.emit("processing-state", false).ok();
-                return Err(e);
-            }
+        let result = async {
+            let samples = local_audio::pcm16_24k_to_16k(&audio_data)?;
+            run_local_transcription(
+                &app,
+                model,
+                samples,
+                language.clone(),
+                vocabulary_prompt.clone(),
+            )
+            .await
         }
-    } else if stt_provider == parakeet::SttProvider::Whisper {
-        println!("[Dictato] Transcribing {} bytes locally with Whisper", audio_data.len());
-        app.emit("processing-state", true).ok();
-        parakeet::set_transcribing(true);
-        let whisper_state = app.state::<whisper::WhisperState>();
-        let state_clone = whisper_state.inner().clone();
-        let lang = language.clone();
-        let vocab = vocabulary_prompt.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_pcm16(&state_clone, audio_data, &lang, vocab.as_deref());
-            parakeet::set_transcribing(false);
-            r
-        })
-        .await
-        .map_err(|e| {
-            parakeet::set_transcribing(false);
-            format!("Transcription task failed: {}", e)
-        })?;
+        .await;
         match result {
             Ok(text) => text,
             Err(e) => {
@@ -729,17 +709,8 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                 } else {
                     let stt_provider = get_stt_provider_from_store(&app);
                     let can_record = match stt_provider {
-                        parakeet::SttProvider::Parakeet => {
-                            let parakeet_state = app.state::<parakeet::ParakeetState>();
-                            parakeet::is_model_loaded(&parakeet_state)
-                        }
-                        parakeet::SttProvider::Whisper => {
-                            let whisper_state = app.state::<whisper::WhisperState>();
-                            whisper::is_model_loaded(&whisper_state)
-                        }
-                        parakeet::SttProvider::Groq => {
-                            get_groq_api_key_from_store(&app).is_some()
-                        }
+                        SttProvider::Local(model) => is_local_model_loaded(&app, model),
+                        SttProvider::Groq => get_groq_api_key_from_store(&app).is_some(),
                     };
 
                     if can_record {
@@ -748,13 +719,16 @@ async fn register_shortcut(app: AppHandle, shortcut_str: String) -> Result<(), S
                         }
                     } else {
                         match stt_provider {
-                            parakeet::SttProvider::Parakeet => {
-                                show_error(&app, "Parakeet model not loaded. Download it in Settings.");
+                            SttProvider::Local(model) => {
+                                show_error(
+                                    &app,
+                                    &format!(
+                                        "{} model not loaded. Download it in Settings → Models.",
+                                        model.name()
+                                    ),
+                                );
                             }
-                            parakeet::SttProvider::Whisper => {
-                                show_error(&app, "Whisper model not loaded. Download it in Settings.");
-                            }
-                            parakeet::SttProvider::Groq => {
+                            SttProvider::Groq => {
                                 show_error(&app, "No API key configured. Add your Groq API key in Settings.");
                             }
                         }
@@ -879,10 +853,10 @@ fn get_llm_provider_name(provider: &llm::LlmProvider) -> &'static str {
     }
 }
 
-fn get_stt_provider_from_store(app: &AppHandle) -> parakeet::SttProvider {
+fn get_stt_provider_from_store(app: &AppHandle) -> SttProvider {
     get_store_string(app, store_keys::STT_PROVIDER)
-        .map(|s| parakeet::SttProvider::from_store_value(&s))
-        .unwrap_or(parakeet::SttProvider::Groq)
+        .map(|s| SttProvider::from_store_value(&s))
+        .unwrap_or(SttProvider::Groq)
 }
 
 fn get_language_from_store(app: &AppHandle) -> String {
@@ -1209,100 +1183,197 @@ async fn validate_anthropic_key(api_key: String) -> Result<(), String> {
     llm::validate_anthropic_key(&api_key).await
 }
 
-// ============== Parakeet commands ==============
+// ============== Local model commands ==============
 
-#[tauri::command]
-async fn get_parakeet_model_status(app: AppHandle) -> Result<String, String> {
-    let model_dir = parakeet::get_model_dir(&app)?;
-    if parakeet::is_model_downloaded(&model_dir) {
-        let parakeet_state = app.state::<parakeet::ParakeetState>();
-        if parakeet::is_model_loaded(&parakeet_state) {
-            Ok("ready".to_string())
-        } else {
-            Ok("downloaded".to_string())
+fn is_local_model_loaded(app: &AppHandle, model: LocalModel) -> bool {
+    match model {
+        LocalModel::Whisper => whisper::is_model_loaded(&app.state::<whisper::WhisperState>()),
+    }
+}
+
+/// Blocking: read `model` from disk into memory.
+fn load_local_model_blocking(app: &AppHandle, model: LocalModel) -> Result<(), String> {
+    let dir = models::model_dir(app, model)?;
+    match model {
+        LocalModel::Whisper => whisper::load_model(&app.state::<whisper::WhisperState>(), &dir),
+    }
+}
+
+fn unload_local_model(app: &AppHandle, model: LocalModel) {
+    match model {
+        LocalModel::Whisper => whisper::unload_model(&app.state::<whisper::WhisperState>()),
+    }
+}
+
+/// Blocking: run inference on 16 kHz mono samples.
+fn transcribe_local_blocking(
+    app: &AppHandle,
+    model: LocalModel,
+    samples: &[f32],
+    language: &str,
+    vocabulary_prompt: Option<&str>,
+) -> Result<String, String> {
+    match model {
+        LocalModel::Whisper => whisper::transcribe(
+            &app.state::<whisper::WhisperState>(),
+            samples,
+            language,
+            vocabulary_prompt,
+        ),
+    }
+}
+
+/// Run local inference off the async runtime. The transcribing flag blocks
+/// model deletion while inference holds the model.
+async fn run_local_transcription(
+    app: &AppHandle,
+    model: LocalModel,
+    samples: Vec<f32>,
+    language: String,
+    vocabulary_prompt: Option<String>,
+) -> Result<String, String> {
+    models::set_transcribing(true);
+    let app_clone = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcribe_local_blocking(
+            &app_clone,
+            model,
+            &samples,
+            &language,
+            vocabulary_prompt.as_deref(),
+        )
+    })
+    .await;
+    models::set_transcribing(false);
+    result.map_err(|e| format!("Transcription task failed: {}", e))?
+}
+
+/// Load `model` on a background thread, flagging progress for the UI.
+fn spawn_load_local_model(app: &AppHandle, model: LocalModel) {
+    if is_local_model_loaded(app, model) || models::is_loading(model) {
+        return;
+    }
+    models::set_loading(model, true);
+    models::emit_changed(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = load_local_model_blocking(&app, model) {
+            eprintln!("[{}] Failed to load model: {}", model.name(), e);
         }
-    } else {
-        Ok("not_downloaded".to_string())
-    }
+        models::set_loading(model, false);
+        models::emit_changed(&app);
+    });
 }
 
-#[tauri::command]
-async fn download_parakeet_model(app: AppHandle) -> Result<(), String> {
-    parakeet::download_model(&app).await?;
-
-    // Load model after download
-    let model_dir = parakeet::get_model_dir(&app)?;
-    let parakeet_state = app.state::<parakeet::ParakeetState>();
-    let state_clone = parakeet_state.inner().clone();
-
-    tokio::task::spawn_blocking(move || parakeet::load_model(&state_clone, &model_dir))
-        .await
-        .map_err(|e| format!("Load task failed: {}", e))??;
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn delete_parakeet_model(app: AppHandle) -> Result<(), String> {
-    if IS_RECORDING.load(Ordering::SeqCst) || parakeet::is_transcribing() {
-        return Err("Cannot delete model during active recording or transcription".to_string());
-    }
-
-    let parakeet_state = app.state::<parakeet::ParakeetState>();
-    parakeet::unload_model(&parakeet_state)?;
-
-    let model_dir = parakeet::get_model_dir(&app)?;
-    parakeet::delete_model(&model_dir)?;
-
-    Ok(())
-}
-
-// ============== Whisper commands ==============
-
-#[tauri::command]
-async fn get_whisper_model_status(app: AppHandle) -> Result<String, String> {
-    let model_dir = whisper::get_model_dir(&app)?;
-    if whisper::is_model_downloaded(&model_dir) {
-        let whisper_state = app.state::<whisper::WhisperState>();
-        if whisper::is_model_loaded(&whisper_state) {
-            Ok("ready".to_string())
-        } else {
-            Ok("downloaded".to_string())
+/// Make `provider` the active STT provider: unload every other local model
+/// to free memory and load the selected one if it's on disk.
+fn activate_provider(app: &AppHandle, provider: SttProvider) {
+    let selected = provider.local_model();
+    for model in LocalModel::ALL {
+        if Some(model) != selected {
+            unload_local_model(app, model);
         }
-    } else {
-        Ok("not_downloaded".to_string())
+    }
+    if let Some(model) = selected {
+        if models::is_downloaded(app, model) {
+            spawn_load_local_model(app, model);
+        }
+    }
+    models::emit_changed(app);
+}
+
+fn parse_model_id(model_id: &str) -> Result<LocalModel, String> {
+    LocalModel::from_id(model_id).ok_or_else(|| format!("Unknown model: {}", model_id))
+}
+
+fn is_accelerator_active(app: &AppHandle, model: LocalModel) -> bool {
+    match model {
+        LocalModel::Whisper => whisper::is_coreml_active(&app.state::<whisper::WhisperState>()),
     }
 }
 
 #[tauri::command]
-async fn download_whisper_model(app: AppHandle) -> Result<(), String> {
-    whisper::download_model(&app).await?;
+fn get_local_models_status(app: AppHandle) -> Vec<models::LocalModelStatus> {
+    LocalModel::ALL
+        .iter()
+        .map(|&model| {
+            models::status(
+                &app,
+                model,
+                is_local_model_loaded(&app, model),
+                is_accelerator_active(&app, model),
+            )
+        })
+        .collect()
+}
 
-    // Load model after download
-    let model_dir = whisper::get_model_dir(&app)?;
-    let whisper_state = app.state::<whisper::WhisperState>();
-    let state_clone = whisper_state.inner().clone();
+/// Load the model if it's the selected provider; used after downloads.
+fn load_if_selected(app: &AppHandle, model: LocalModel) {
+    if get_stt_provider_from_store(app).local_model() == Some(model) {
+        spawn_load_local_model(app, model);
+    }
+}
 
-    tokio::task::spawn_blocking(move || whisper::load_model(&state_clone, &model_dir))
-        .await
-        .map_err(|e| format!("Load task failed: {}", e))??;
+#[tauri::command]
+async fn download_local_model(app: AppHandle, model_id: String) -> Result<(), String> {
+    let model = parse_model_id(&model_id)?;
+    models::download(app.clone(), model, false).await?;
+    load_if_selected(&app, model);
+    Ok(())
+}
 
+/// Fetch the optional accelerator and reload the engine so it picks it up.
+#[tauri::command]
+async fn download_model_accelerator(app: AppHandle, model_id: String) -> Result<(), String> {
+    let model = parse_model_id(&model_id)?;
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
+        return Err("Cannot change models during active recording or transcription".to_string());
+    }
+    models::download(app.clone(), model, true).await?;
+    unload_local_model(&app, model);
+    load_if_selected(&app, model);
+    models::emit_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
-async fn delete_whisper_model(app: AppHandle) -> Result<(), String> {
-    if IS_RECORDING.load(Ordering::SeqCst) || parakeet::is_transcribing() {
-        return Err("Cannot delete model during active recording or transcription".to_string());
+async fn delete_model_accelerator(app: AppHandle, model_id: String) -> Result<(), String> {
+    let model = parse_model_id(&model_id)?;
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
+        return Err("Cannot change models during active recording or transcription".to_string());
     }
-
-    let whisper_state = app.state::<whisper::WhisperState>();
-    whisper::unload_model(&whisper_state)?;
-
-    let model_dir = whisper::get_model_dir(&app)?;
-    whisper::delete_model(&model_dir)?;
-
+    unload_local_model(&app, model);
+    models::delete_accelerator(&app, model)?;
+    load_if_selected(&app, model);
+    models::emit_changed(&app);
     Ok(())
+}
+
+#[tauri::command]
+fn cancel_local_model_download(model_id: String) -> Result<(), String> {
+    models::cancel_download(parse_model_id(&model_id)?);
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_local_model(app: AppHandle, model_id: String) -> Result<(), String> {
+    let model = parse_model_id(&model_id)?;
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
+        return Err("Cannot delete a model during active recording or transcription".to_string());
+    }
+    if models::is_downloading(model) {
+        return Err("Cancel the download first".to_string());
+    }
+    unload_local_model(&app, model);
+    models::delete(&app, model)?;
+    models::emit_changed(&app);
+    Ok(())
+}
+
+/// Called by the frontend after it persists a new STT provider.
+#[tauri::command]
+async fn activate_stt_provider(app: AppHandle, provider: String) {
+    activate_provider(&app, SttProvider::from_store_value(&provider));
 }
 
 // ============== Autostart commands (Windows only) ==============
@@ -1427,46 +1498,19 @@ async fn transcribe_file(
     let duration = transcribe::get_audio_duration(&audio_path).unwrap_or(0.0);
 
     // Transcribe using the selected STT provider
-    let raw_text = if stt_provider == parakeet::SttProvider::Parakeet {
-        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing locally...");
+    let raw_text = if let Some(model) = stt_provider.local_model() {
+        emit_transcribe_progress(
+            &app,
+            progress_stages::TRANSCRIBING,
+            progress_percent::TRANSCRIBE_SINGLE,
+            &format!("Transcribing locally with {}...", model.name()),
+        );
 
-        parakeet::set_transcribing(true);
-        let parakeet_state = app.state::<parakeet::ParakeetState>();
-        let state_clone = parakeet_state.inner().clone();
-        let audio_path_clone = audio_path.clone();
-
-        let result = tokio::task::spawn_blocking(move || {
-            let r = parakeet::transcribe_file_local(&state_clone, &audio_path_clone);
-            parakeet::set_transcribing(false);
-            r
-        })
-        .await
-        .map_err(|e| {
-            parakeet::set_transcribing(false);
-            format!("Transcription task failed: {}", e)
-        })?;
-        result?
-    } else if stt_provider == parakeet::SttProvider::Whisper {
-        emit_transcribe_progress(&app, progress_stages::TRANSCRIBING, progress_percent::TRANSCRIBE_SINGLE, "Transcribing locally with Whisper...");
-
-        parakeet::set_transcribing(true);
-        let whisper_state = app.state::<whisper::WhisperState>();
-        let state_clone = whisper_state.inner().clone();
-        let audio_path_clone = audio_path.clone();
-        let lang = language.clone();
-        let vocab = vocabulary_prompt.clone();
-
-        let result = tokio::task::spawn_blocking(move || {
-            let r = whisper::transcribe_file_local(&state_clone, &audio_path_clone, &lang, vocab.as_deref());
-            parakeet::set_transcribing(false);
-            r
-        })
-        .await
-        .map_err(|e| {
-            parakeet::set_transcribing(false);
-            format!("Transcription task failed: {}", e)
-        })?;
-        result?
+        // Local engines take 16 kHz mono PCM; ffmpeg normalizes whatever came in
+        let wav_path = transcribe::convert_to_wav_16k(&audio_path, temp_path)?;
+        let samples = local_audio::read_wav_as_f32_16k(&wav_path)?;
+        run_local_transcription(&app, model, samples, language.clone(), vocabulary_prompt.clone())
+            .await?
     } else {
         let groq_api_key = get_groq_api_key_from_store(&app)
             .ok_or("Groq API key required. Add it in Settings.")?;
@@ -1580,19 +1624,15 @@ async fn transcribe_youtube(
     // Validate STT provider is ready
     let stt_provider = get_stt_provider_from_store(&app);
     match stt_provider {
-        parakeet::SttProvider::Parakeet => {
-            let parakeet_state = app.state::<parakeet::ParakeetState>();
-            if !parakeet::is_model_loaded(&parakeet_state) {
-                return Err("Parakeet model not loaded. Download it in Settings.".to_string());
+        SttProvider::Local(model) => {
+            if !is_local_model_loaded(&app, model) {
+                return Err(format!(
+                    "{} model not loaded. Download it in Settings → Models.",
+                    model.name()
+                ));
             }
         }
-        parakeet::SttProvider::Whisper => {
-            let whisper_state = app.state::<whisper::WhisperState>();
-            if !whisper::is_model_loaded(&whisper_state) {
-                return Err("Whisper model not loaded. Download it in Settings.".to_string());
-            }
-        }
-        parakeet::SttProvider::Groq => {
+        SttProvider::Groq => {
             get_groq_api_key_from_store(&app)
                 .ok_or("Groq API key required. Add it in Settings.")?;
         }
@@ -1928,7 +1968,6 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
-        .manage(parakeet::ParakeetState::default())
         .manage(whisper::WhisperState::default())
         .manage(keyboard_lock::LockState::default())
         .invoke_handler(tauri::generate_handler![
@@ -1957,12 +1996,13 @@ pub fn run() {
             check_transcribe_dependencies,
             transcribe_file,
             transcribe_youtube,
-            get_parakeet_model_status,
-            download_parakeet_model,
-            delete_parakeet_model,
-            get_whisper_model_status,
-            download_whisper_model,
-            delete_whisper_model,
+            get_local_models_status,
+            download_local_model,
+            download_model_accelerator,
+            delete_model_accelerator,
+            cancel_local_model_download,
+            delete_local_model,
+            activate_stt_provider,
             engage_cleaning_mode,
             get_cleaning_mode_state,
             close_cleaning_overlay,
@@ -1978,75 +2018,22 @@ pub fn run() {
             // Register pure paste shortcut on startup (if previously enabled)
             register_pure_paste_shortcut_internal(app.handle()).ok();
 
-            // Check STT provider and show settings if needed
+            // Load the selected local model in the background; open Settings
+            // when the provider isn't usable yet so the user can fix it.
             let stt_provider = get_stt_provider_from_store(app.handle());
-            match stt_provider {
-                parakeet::SttProvider::Parakeet => {
-                    let model_dir = match parakeet::get_model_dir(app.handle()) {
-                        Ok(dir) => dir,
-                        Err(e) => {
-                            eprintln!("[Parakeet] Failed to get model dir on startup: {}", e);
-                            show_main_window(app.handle());
-                            return Ok(());
-                        }
-                    };
-                    if parakeet::is_model_downloaded(&model_dir) {
-                        // Load model in background on startup.
-                        // Uses std::thread::spawn because setup() is not async.
-                        let parakeet_state = app.state::<parakeet::ParakeetState>();
-                        let state_clone = parakeet_state.inner().clone();
-                        let app_handle = app.handle().clone();
-                        std::thread::spawn(move || {
-                            app_handle.emit(parakeet::EVENT_LOADING, true).ok();
-                            match parakeet::load_model(&state_clone, &model_dir) {
-                                Ok(_) => {
-                                    app_handle.emit(parakeet::EVENT_LOADING, false).ok();
-                                }
-                                Err(e) => {
-                                    eprintln!("[Parakeet] Failed to load model on startup: {}", e);
-                                    app_handle.emit(parakeet::EVENT_LOADING, false).ok();
-                                }
-                            }
-                        });
+            let ready = match stt_provider {
+                SttProvider::Local(model) => {
+                    if models::is_downloaded(app.handle(), model) {
+                        spawn_load_local_model(app.handle(), model);
+                        true
                     } else {
-                        show_main_window(app.handle());
+                        false
                     }
                 }
-                parakeet::SttProvider::Whisper => {
-                    let model_dir = match whisper::get_model_dir(app.handle()) {
-                        Ok(dir) => dir,
-                        Err(e) => {
-                            eprintln!("[Whisper] Failed to get model dir on startup: {}", e);
-                            show_main_window(app.handle());
-                            return Ok(());
-                        }
-                    };
-                    if whisper::is_model_downloaded(&model_dir) {
-                        let whisper_state = app.state::<whisper::WhisperState>();
-                        let state_clone = whisper_state.inner().clone();
-                        let app_handle = app.handle().clone();
-                        std::thread::spawn(move || {
-                            app_handle.emit(whisper::EVENT_LOADING, true).ok();
-                            match whisper::load_model(&state_clone, &model_dir) {
-                                Ok(_) => {
-                                    app_handle.emit(whisper::EVENT_LOADING, false).ok();
-                                }
-                                Err(e) => {
-                                    eprintln!("[Whisper] Failed to load model on startup: {}", e);
-                                    app_handle.emit(whisper::EVENT_LOADING, false).ok();
-                                }
-                            }
-                        });
-                    } else {
-                        show_main_window(app.handle());
-                    }
-                }
-                parakeet::SttProvider::Groq => {
-                    let has_api_key = get_groq_api_key_from_store(app.handle()).is_some();
-                    if !has_api_key {
-                        show_main_window(app.handle());
-                    }
-                }
+                SttProvider::Groq => get_groq_api_key_from_store(app.handle()).is_some(),
+            };
+            if !ready {
+                show_main_window(app.handle());
             }
 
             Ok(())

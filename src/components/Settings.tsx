@@ -1,7 +1,9 @@
 import { useSettings } from "../hooks/useSettings";
 import { useNavigation } from "../hooks/useNavigation";
+import { useLocalModels } from "../hooks/useLocalModels";
 import { AppLayout } from "./layout/AppLayout";
 import { GeneralSection } from "./sections/GeneralSection";
+import { ModelsSection } from "./sections/ModelsSection";
 import { RecordingSection } from "./sections/RecordingSection";
 import { RulesSection } from "./sections/RulesSection";
 import { TranscribeSection } from "./sections/TranscribeSection";
@@ -56,6 +58,8 @@ export function Settings({
     toggleCollapsed,
   } = useNavigation();
 
+  const localModels = useLocalModels();
+
   if (isSettingsLoading || isNavLoading) {
     return (
       <div className="min-h-screen bg-background p-5 flex items-center justify-center text-muted-foreground text-[13px]">
@@ -90,6 +94,16 @@ export function Settings({
           onSaveAnthropicApiKey={updateAnthropicApiKey}
           onUpdateLlmProvider={updateLlmProvider}
           onUpdateLlmModel={updateLlmModel}
+          localModels={localModels.models}
+          onNavigate={navigateTo}
+        />
+      </div>
+
+      <div className={activeSection === "models" ? "block" : "hidden"}>
+        <ModelsSection
+          localModels={localModels}
+          sttProvider={settings.sttProvider}
+          onUpdateSttProvider={updateSttProvider}
         />
       </div>
 

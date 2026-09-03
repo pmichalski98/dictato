@@ -2,6 +2,7 @@ import { ComponentType } from "react";
 
 export type Section =
   | "general"
+  | "models"
   | "recording"
   | "rules"
   | "transcribe"

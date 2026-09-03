@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { emit } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { STORE_KEYS } from "@/lib/storeKeys";
 import { DEFAULT_MODES, NONE_MODE_ID } from "@/lib/modes";
 import type { IconName } from "@/components/IconPicker";
@@ -9,23 +10,22 @@ import type { IconName } from "@/components/IconPicker";
 export { DEFAULT_MODES };
 
 // STT Provider types
-export type SttProvider = "groq" | "parakeet" | "whisper";
+/** Local model ids — must match `LocalModel::id()` in src-tauri/src/models.rs */
+export type LocalModelId = "whisper";
+export type SttProvider = "groq" | LocalModelId;
 
 export const STT_PROVIDERS = {
   groq: {
     id: "groq" as const,
     name: "Groq Cloud",
     description: "Fast cloud transcription via Whisper",
-  },
-  parakeet: {
-    id: "parakeet" as const,
-    name: "Parakeet Local",
-    description: "Local transcription, no API key needed",
+    local: false,
   },
   whisper: {
     id: "whisper" as const,
     name: "Whisper Local",
     description: "Local Whisper large-v3-turbo with Metal GPU",
+    local: true,
   },
 } as const;
 
@@ -271,6 +271,8 @@ export function useSettings() {
     try {
       await store.set(STORE_KEYS.STT_PROVIDER, sttProvider);
       setSettings((prev) => ({ ...prev, sttProvider }));
+      // Backend unloads the other local models and loads this one
+      await invoke("activate_stt_provider", { provider: sttProvider });
     } catch (err) {
       console.error("Failed to save STT provider:", err);
     }

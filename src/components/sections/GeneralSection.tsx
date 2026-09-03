@@ -1,10 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 import {
   Check,
-  Download,
   Eye,
   EyeOff,
   HardDrive,
@@ -12,9 +10,10 @@ import {
   Mic,
   Settings2,
   Sparkles,
-  Trash2,
 } from "lucide-react";
-import { EVENTS, ICON_SIZES, PLATFORMS, STATUS_RESET_DELAY_MS } from "@/lib/constants";
+import { ICON_SIZES, PLATFORMS, STATUS_RESET_DELAY_MS } from "@/lib/constants";
+import type { Section } from "@/types/navigation";
+import type { LocalModelStatus } from "@/hooks/useLocalModels";
 import { SectionLayout } from "../layout/SectionLayout";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -220,409 +219,6 @@ function SectionDivider({
   );
 }
 
-type ParakeetStatus =
-  | "checking"
-  | "not_downloaded"
-  | "downloading"
-  | "loading"
-  | "downloaded"
-  | "ready"
-  | "error";
-
-interface DownloadProgress {
-  bytesDownloaded?: number;
-  totalBytes?: number;
-  percent: number;
-  finishing: boolean;
-}
-
-function ParakeetModelCard() {
-  const [status, setStatus] = useState<ParakeetStatus>("checking");
-  const [downloadProgress, setDownloadProgress] =
-    useState<DownloadProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function checkStatus() {
-      try {
-        const result = await invoke<string>("get_parakeet_model_status");
-        setStatus(result as ParakeetStatus);
-      } catch (err) {
-        console.error("Failed to check model status:", err);
-        setStatus("error");
-        setError(String(err));
-      }
-    }
-    checkStatus();
-  }, []);
-
-  useEffect(() => {
-    const unlistenProgress = listen<DownloadProgress>(
-      EVENTS.PARAKEET_DOWNLOAD_PROGRESS,
-      (event) => {
-        setDownloadProgress(event.payload);
-      }
-    );
-    const unlistenLoading = listen<boolean>(
-      EVENTS.PARAKEET_LOADING,
-      (event) => {
-        if (event.payload) {
-          setStatus("loading");
-        } else {
-          // Refresh actual status after loading completes
-          invoke<string>("get_parakeet_model_status")
-            .then((result) => setStatus(result as ParakeetStatus))
-            .catch(() => {});
-        }
-      }
-    );
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenLoading.then((fn) => fn());
-    };
-  }, []);
-
-  const handleDownload = useCallback(async () => {
-    setStatus("downloading");
-    setError(null);
-    setDownloadProgress(null);
-    try {
-      await invoke("download_parakeet_model");
-      setStatus("ready");
-    } catch (err) {
-      console.error("Failed to download model:", err);
-      setStatus("error");
-      setError(String(err));
-    }
-  }, []);
-
-  const handleDelete = useCallback(async () => {
-    setError(null);
-    try {
-      await invoke("delete_parakeet_model");
-      setStatus("not_downloaded");
-      setDownloadProgress(null);
-    } catch (err) {
-      console.error("Failed to delete model:", err);
-      setError(String(err));
-    }
-  }, []);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  return (
-    <Card className="space-y-3">
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <HardDrive size={ICON_SIZES.sm} className="text-muted-foreground" />
-          <Label>Parakeet Model</Label>
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          NVIDIA Parakeet TDT v3 (600M params, ~670 MB download). Supports 25
-          European languages.
-        </p>
-      </div>
-
-      {status === "checking" && (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
-          Checking model status...
-        </div>
-      )}
-
-      {status === "not_downloaded" && (
-        <Button onClick={handleDownload} className="w-full">
-          <Download size={ICON_SIZES.sm} className="mr-1.5" />
-          Download Model (~670 MB)
-        </Button>
-      )}
-
-      {status === "downloading" && (
-        <div className="space-y-2">
-          {downloadProgress?.finishing ? (
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
-              Finishing up...
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-muted-foreground">
-                  Downloading model...
-                </span>
-                <span className="text-foreground font-medium">
-                  {downloadProgress
-                    ? `${downloadProgress.percent.toFixed(0)}%`
-                    : ""}
-                </span>
-              </div>
-              <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{
-                    width: `${downloadProgress?.percent ?? 0}%`,
-                  }}
-                />
-              </div>
-              {downloadProgress?.bytesDownloaded != null &&
-                downloadProgress?.totalBytes != null &&
-                downloadProgress.totalBytes > 0 && (
-                  <p className="text-[10px] text-muted-foreground">
-                    {formatBytes(downloadProgress.bytesDownloaded)} /{" "}
-                    {formatBytes(downloadProgress.totalBytes)}
-                  </p>
-                )}
-            </>
-          )}
-        </div>
-      )}
-
-      {status === "loading" && (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
-          Loading model into memory...
-        </div>
-      )}
-
-      {(status === "ready" || status === "downloaded") && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
-            <div
-              className={`w-1.5 h-1.5 rounded-full ${
-                status === "ready"
-                  ? "bg-green-500 animate-pulse"
-                  : "bg-amber-500"
-              }`}
-            />
-            <span className="text-[11px] text-muted-foreground">
-              Model{" "}
-              <span className="text-foreground font-medium">
-                {status === "ready" ? "ready" : "downloaded (not loaded)"}
-              </span>
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDelete}
-            className="text-[11px] text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 size={ICON_SIZES.xs} className="mr-1" />
-            Delete model
-          </Button>
-        </div>
-      )}
-
-      {error && (
-        <div className="space-y-2">
-          <p className="text-[11px] text-destructive">{error}</p>
-          {status === "error" && (
-            <Button onClick={handleDownload} variant="default" size="sm">
-              Retry Download
-            </Button>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-type WhisperStatus =
-  | "checking"
-  | "not_downloaded"
-  | "downloading"
-  | "loading"
-  | "downloaded"
-  | "ready"
-  | "error";
-
-function WhisperModelCard() {
-  const [status, setStatus] = useState<WhisperStatus>("checking");
-  const [downloadProgress, setDownloadProgress] =
-    useState<DownloadProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function checkStatus() {
-      try {
-        const result = await invoke<string>("get_whisper_model_status");
-        setStatus(result as WhisperStatus);
-      } catch (err) {
-        console.error("Failed to check Whisper model status:", err);
-        setStatus("error");
-        setError(String(err));
-      }
-    }
-    checkStatus();
-  }, []);
-
-  useEffect(() => {
-    const unlistenProgress = listen<DownloadProgress>(
-      EVENTS.WHISPER_DOWNLOAD_PROGRESS,
-      (event) => {
-        setDownloadProgress(event.payload);
-      }
-    );
-    const unlistenLoading = listen<boolean>(
-      EVENTS.WHISPER_LOADING,
-      (event) => {
-        if (event.payload) {
-          setStatus("loading");
-        } else {
-          invoke<string>("get_whisper_model_status")
-            .then((result) => setStatus(result as WhisperStatus))
-            .catch(() => {});
-        }
-      }
-    );
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenLoading.then((fn) => fn());
-    };
-  }, []);
-
-  const handleDownload = useCallback(async () => {
-    setStatus("downloading");
-    setError(null);
-    setDownloadProgress(null);
-    try {
-      await invoke("download_whisper_model");
-      setStatus("ready");
-    } catch (err) {
-      console.error("Failed to download Whisper model:", err);
-      setStatus("error");
-      setError(String(err));
-    }
-  }, []);
-
-  const handleDelete = useCallback(async () => {
-    setError(null);
-    try {
-      await invoke("delete_whisper_model");
-      setStatus("not_downloaded");
-      setDownloadProgress(null);
-    } catch (err) {
-      console.error("Failed to delete Whisper model:", err);
-      setError(String(err));
-    }
-  }, []);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  return (
-    <Card className="space-y-3">
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <HardDrive size={ICON_SIZES.sm} className="text-muted-foreground" />
-          <Label>Whisper Model</Label>
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          OpenAI Whisper large-v3-turbo (q5_0 quantized, ~850 MB download).
-          Metal GPU accelerated on macOS.
-        </p>
-      </div>
-
-      {status === "checking" && (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
-          Checking model status...
-        </div>
-      )}
-
-      {status === "not_downloaded" && (
-        <Button onClick={handleDownload} className="w-full">
-          <Download size={ICON_SIZES.sm} className="mr-1.5" />
-          Download Model (~850 MB)
-        </Button>
-      )}
-
-      {status === "downloading" && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-muted-foreground">
-              Downloading model...
-            </span>
-            <span className="text-foreground font-medium">
-              {downloadProgress
-                ? `${downloadProgress.percent.toFixed(0)}%`
-                : ""}
-            </span>
-          </div>
-          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary rounded-full transition-all duration-300"
-              style={{
-                width: `${downloadProgress?.percent ?? 0}%`,
-              }}
-            />
-          </div>
-          {downloadProgress?.bytesDownloaded != null &&
-            downloadProgress?.totalBytes != null &&
-            downloadProgress.totalBytes > 0 && (
-              <p className="text-[10px] text-muted-foreground">
-                {formatBytes(downloadProgress.bytesDownloaded)} /{" "}
-                {formatBytes(downloadProgress.totalBytes)}
-              </p>
-            )}
-        </div>
-      )}
-
-      {status === "loading" && (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          <Loader2 size={ICON_SIZES.sm} className="animate-spin" />
-          Loading model into memory...
-        </div>
-      )}
-
-      {(status === "ready" || status === "downloaded") && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
-            <div
-              className={`w-1.5 h-1.5 rounded-full ${
-                status === "ready"
-                  ? "bg-green-500 animate-pulse"
-                  : "bg-amber-500"
-              }`}
-            />
-            <span className="text-[11px] text-muted-foreground">
-              Model{" "}
-              <span className="text-foreground font-medium">
-                {status === "ready" ? "ready" : "downloaded (not loaded)"}
-              </span>
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDelete}
-            className="text-[11px] text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 size={ICON_SIZES.xs} className="mr-1" />
-            Delete model
-          </Button>
-        </div>
-      )}
-
-      {error && (
-        <div className="space-y-2">
-          <p className="text-[11px] text-destructive">{error}</p>
-          {status === "error" && (
-            <Button onClick={handleDownload} variant="default" size="sm">
-              Retry Download
-            </Button>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
 interface GeneralSectionProps {
   sttProvider: SttProvider;
   groqApiKey: string;
@@ -638,6 +234,9 @@ interface GeneralSectionProps {
   onSaveAnthropicApiKey: (key: string) => Promise<void>;
   onUpdateLlmProvider: (provider: LlmProvider) => Promise<void>;
   onUpdateLlmModel: (provider: LlmProvider, model: string) => Promise<void>;
+  /** Download state of every local model, from the Models section */
+  localModels: LocalModelStatus[];
+  onNavigate: (section: Section) => void;
 }
 
 export function GeneralSection({
@@ -655,8 +254,15 @@ export function GeneralSection({
   onSaveAnthropicApiKey,
   onUpdateLlmProvider,
   onUpdateLlmModel,
+  localModels,
+  onNavigate,
 }: GeneralSectionProps) {
   const hasOpenaiKey = !!openaiApiKey;
+
+  // Local providers are only selectable once their model is on disk
+  const modelById = new Map(localModels.map((m) => [m.id, m]));
+  const activeLocalModel =
+    sttProvider === "groq" ? undefined : modelById.get(sttProvider);
   const hasGoogleKey = !!googleApiKey;
   const hasAnthropicKey = !!anthropicApiKey;
 
@@ -766,7 +372,8 @@ export function GeneralSection({
         <div className="space-y-1.5">
           <Label>Transcription Provider</Label>
           <p className="text-[11px] text-muted-foreground">
-            Choose between cloud or local speech-to-text
+            Choose between cloud or local speech-to-text. Local models become
+            selectable once downloaded.
           </p>
           <Select
             value={sttProvider}
@@ -774,18 +381,61 @@ export function GeneralSection({
               onUpdateSttProvider(e.target.value as SttProvider)
             }
           >
-            {Object.values(STT_PROVIDERS).map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name} — {provider.description}
-              </option>
-            ))}
+            {Object.values(STT_PROVIDERS).map((provider) => {
+              const isLocal = provider.id !== "groq";
+              const model = isLocal ? modelById.get(provider.id) : undefined;
+              const available = !isLocal || !!model?.downloaded;
+              return (
+                <option
+                  key={provider.id}
+                  value={provider.id}
+                  disabled={!available && provider.id !== sttProvider}
+                >
+                  {provider.name} — {provider.description}
+                  {!available ? " (not downloaded)" : ""}
+                </option>
+              );
+            })}
           </Select>
         </div>
+
+        {sttProvider !== "groq" && (
+          <div className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
+            <div className="flex items-center gap-2 min-w-0">
+              {activeLocalModel?.loading ? (
+                <Loader2 size={ICON_SIZES.xs} className="animate-spin text-muted-foreground shrink-0" />
+              ) : (
+                <div
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    activeLocalModel?.loaded
+                      ? "bg-green-500 animate-pulse"
+                      : activeLocalModel?.downloaded
+                      ? "bg-amber-500"
+                      : "bg-destructive"
+                  }`}
+                />
+              )}
+              <span className="text-[11px] text-muted-foreground truncate">
+                {activeLocalModel?.loading
+                  ? "Loading model into memory..."
+                  : activeLocalModel?.loaded
+                  ? "Model ready"
+                  : activeLocalModel?.downloaded
+                  ? "Model downloaded, not loaded"
+                  : "Model not downloaded"}
+              </span>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onNavigate("models")}
+            >
+              <HardDrive size={ICON_SIZES.xs} className="mr-1" />
+              Manage models
+            </Button>
+          </div>
+        )}
       </Card>
-
-      {sttProvider === "parakeet" && <ParakeetModelCard />}
-
-      {sttProvider === "whisper" && <WhisperModelCard />}
 
       {sttProvider === "groq" && (
         <ApiKeyCard

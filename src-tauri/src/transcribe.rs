@@ -199,6 +199,27 @@ pub fn convert_audio_for_api(
     Ok(output_path)
 }
 
+/// Convert any supported audio/video file to 16 kHz mono PCM16 WAV, the
+/// input format every local speech-to-text engine expects.
+pub fn convert_to_wav_16k(input_path: &Path, output_dir: &Path) -> Result<PathBuf, String> {
+    let output_path = output_dir.join("local_input_16k.wav");
+
+    let output = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(input_path)
+        .args(["-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", "-y"])
+        .arg(&output_path)
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg conversion failed: {}", stderr));
+    }
+
+    Ok(output_path)
+}
+
 /// Callback type for progress updates
 pub type ProgressCallback = Box<dyn Fn(f32, &str) + Send>;
 

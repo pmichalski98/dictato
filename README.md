@@ -21,10 +21,9 @@ A desktop voice-to-text app: press a global shortcut, speak, and the transcribed
 ## Features
 
 - **Push-to-talk dictation** — trigger recording anywhere with a configurable global shortcut; a small always-on-top orb shows recording state, and the result is auto-pasted into the active app
-- **Three transcription engines**, switchable in settings:
+- **Two transcription engines**, switchable in settings:
   - **Groq** — cloud Whisper API (fast, needs an API key)
-  - **Parakeet** — NVIDIA Parakeet TDT v3 running fully locally (~670 MB download, 25 languages)
-  - **Whisper** — OpenAI Whisper large-v3-turbo via whisper.cpp, Metal-accelerated on Apple Silicon (~850 MB download)
+  - **Whisper** — OpenAI Whisper large-v3-turbo via whisper.cpp, Metal-accelerated on Apple Silicon (~550 MB download), managed from a dedicated Models page; an optional Core ML encoder (~1.2 GB) runs on the Neural Engine for ~30% faster dictation
 - **Rules & Modes** — define reusable text-transformation rules (tone, formatting, translation…) applied to transcripts by an LLM; supports OpenAI, Google Gemini, and Anthropic Claude with per-provider model selection
 - **Dictionary** — custom vocabulary to steer tricky names and jargon
 - **File & YouTube transcription** — drop in an audio file or paste a YouTube link (uses `yt-dlp` + `ffmpeg`)
@@ -37,7 +36,7 @@ API keys are entered in the app's settings and stored locally — no config file
 
 ## Tech stack
 
-Tauri v2 · Rust (tokio, cpal, whisper-rs, parakeet-rs, enigo) · React 19 · TypeScript · Tailwind CSS v4 · shadcn/ui · Vite · Bun
+Tauri v2 · Rust (tokio, cpal, whisper-rs, enigo) · React 19 · TypeScript · Tailwind CSS v4 · shadcn/ui · Vite · Bun
 
 ## Install
 

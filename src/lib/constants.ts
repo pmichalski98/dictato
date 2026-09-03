@@ -49,10 +49,8 @@ export const ALL_SUPPORTED_FORMATS = [
  */
 export const EVENTS = {
   TRANSCRIBE_PROGRESS: "transcribe-progress",
-  PARAKEET_DOWNLOAD_PROGRESS: "parakeet-download-progress",
-  PARAKEET_LOADING: "parakeet-loading",
-  WHISPER_DOWNLOAD_PROGRESS: "whisper-download-progress",
-  WHISPER_LOADING: "whisper-loading",
+  MODEL_DOWNLOAD_PROGRESS: "model-download-progress",
+  LOCAL_MODELS_CHANGED: "local-models-changed",
   CLEANING_GRACE_PROGRESS: "cleaning-grace-progress",
   CLEANING_MODE_ERROR: "cleaning-mode-error",
   KEYBOARD_LOCK_CHANGED: "keyboard-lock-changed",
