@@ -28,7 +28,8 @@ interface RulesSectionProps {
   customModes: TranscriptionMode[];
   activeMode: string;
   deletedBuiltInModes: string[];
-  hasOpenaiKey: boolean;
+  /** False when the selected AI provider has no key or its local model isn't downloaded */
+  llmReady: boolean;
   onToggle: (id: string) => void;
   onAdd: (title: string, description: string) => void;
   onUpdate: (id: string, updates: Partial<TranscriptionRule>) => void;
@@ -45,7 +46,7 @@ export function RulesSection({
   customModes,
   activeMode,
   deletedBuiltInModes,
-  hasOpenaiKey,
+  llmReady,
   onToggle,
   onAdd,
   onUpdate,
@@ -154,18 +155,19 @@ export function RulesSection({
       title="Rules & Modes"
       description="Transform your transcriptions with AI-powered rules"
     >
-      {/* OpenAI Key Warning */}
-      {!hasOpenaiKey && (activeMode !== NONE_MODE_ID || enabledCount > 0) && (
+      {/* AI provider warning */}
+      {!llmReady && (activeMode !== NONE_MODE_ID || enabledCount > 0) && (
         <div className="flex items-start gap-2.5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-4">
           <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
           <div className="space-y-1">
             <p className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-              OpenAI API key required
+              AI provider not ready
             </p>
             <p className="text-[11px] text-muted-foreground">
-              You have {activeMode !== NONE_MODE_ID ? "a mode" : "rules"} enabled, but no OpenAI key configured.
+              You have {activeMode !== NONE_MODE_ID ? "a mode" : "rules"} enabled, but the selected AI
+              provider has no API key or its local model isn't downloaded.
               Your transcriptions will be copied without AI transformation.
-              Add your OpenAI key in Settings → General to use these features.
+              Fix it in Settings → General.
             </p>
           </div>
         </div>

@@ -14,9 +14,13 @@ export interface AcceleratorStatus {
   active: boolean;
 }
 
+/** Mirrors `ModelKind` in src-tauri/src/models.rs */
+export type LocalModelKind = "stt" | "llm";
+
 /** Mirrors `LocalModelStatus` in src-tauri/src/models.rs */
 export interface LocalModelStatus {
   id: LocalModelId;
+  kind: LocalModelKind;
   name: string;
   description: string;
   languages: string;

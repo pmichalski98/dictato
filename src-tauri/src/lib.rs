@@ -3,6 +3,7 @@ mod groq;
 mod keyboard_lock;
 mod llm;
 mod local_audio;
+mod local_llm;
 mod models;
 mod transcribe;
 mod whisper;
@@ -11,7 +12,8 @@ use audio::{AudioCaptureHandle, AudioDevice};
 #[cfg(not(target_os = "macos"))]
 use enigo::{Enigo, Key, Keyboard, Settings};
 use groq::GroqState;
-use models::{LocalModel, SttProvider};
+use llm::LlmBackend;
+use models::{LocalModel, ModelKind, SttProvider};
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -227,9 +229,7 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     groq_state.clear_buffer();
 
     let stt_provider = get_stt_provider_from_store(&app);
-    let llm_provider = get_llm_provider_from_store(&app);
-    let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
-    let llm_model = get_llm_model_for_provider(&app, &llm_provider);
+    let llm_backend = resolve_llm_backend(&app);
     let language = get_language_from_store(&app);
     let dictionary = get_dictionary_from_store(&app);
     let vocabulary_prompt = build_vocabulary_prompt(&dictionary);
@@ -290,7 +290,6 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
     let mut processing_kind = "none";
     let mut processing_label: Option<String> = None;
     let raw_transcript = transcript.clone();
-    let provider_name = get_llm_provider_name(&llm_provider);
     let final_text = if !transcript.is_empty() {
         let skip_rules = should_skip_rules(&app);
         if skip_rules {
@@ -299,28 +298,30 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
         } else if let Some(mode_id) = get_active_mode_from_store(&app) {
             // Mode is active - get prompt and apply transformation (rules are ignored)
             if let Some(prompt) = get_mode_prompt_from_store(&app, &mode_id) {
-                // Check for LLM API key
-                if let Some(ref llm_key) = llm_api_key {
-                    app.emit("processing-message", "Applying mode...").ok();
-                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &transcript, &prompt, &language, &dictionary).await {
-                        Ok(processed) => {
-                            println!("[Dictato] Mode '{}' applied successfully using {}", mode_id, provider_name);
-                            processing_kind = "mode";
-                            processing_label = Some(get_mode_name_from_store(&app, &mode_id));
-                            processed
-                        }
-                        Err(e) => {
-                            eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
-                            had_llm_error = true;
-                            show_error(&app, &format_llm_error(&e));
-                            transcript
+                match &llm_backend {
+                    Ok(backend) => {
+                        app.emit("processing-message", "Applying mode...").ok();
+                        match llm::process_with_prompt(backend, &transcript, &prompt, &language, &dictionary).await {
+                            Ok(processed) => {
+                                println!("[Dictato] Mode '{}' applied successfully using {}", mode_id, backend.display_name());
+                                processing_kind = "mode";
+                                processing_label = Some(get_mode_name_from_store(&app, &mode_id));
+                                processed
+                            }
+                            Err(e) => {
+                                eprintln!("[Dictato] Mode processing failed, using raw transcript: {}", e);
+                                had_llm_error = true;
+                                show_error(&app, &format_llm_error(&e));
+                                transcript
+                            }
                         }
                     }
-                } else {
-                    // No API key for selected provider - show error and return raw transcript
-                    had_llm_error = true;
-                    show_error(&app, &format!("No {} API key - mode skipped. Raw transcription copied. Add key in Settings to use modes.", provider_name));
-                    transcript
+                    Err(reason) => {
+                        // Provider not usable - show error and return raw transcript
+                        had_llm_error = true;
+                        show_error(&app, &format!("{} - mode skipped. Raw transcription copied.", reason));
+                        transcript
+                    }
                 }
             } else {
                 println!("[Dictato] Mode '{}' not found, using raw transcript", mode_id);
@@ -331,27 +332,28 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
-                // Check for LLM API key
-                if let Some(ref llm_key) = llm_api_key {
-                    app.emit("processing-message", "Applying rules...").ok();
-                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &transcript, rules, &language, &dictionary).await {
-                        Ok(processed) => {
-                            println!("[Dictato] Rules applied successfully using {}", provider_name);
-                            processing_kind = "rules";
-                            processed
-                        }
-                        Err(e) => {
-                            eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
-                            had_llm_error = true;
-                            show_error(&app, &format_llm_error(&e));
-                            transcript
+                match &llm_backend {
+                    Ok(backend) => {
+                        app.emit("processing-message", "Applying rules...").ok();
+                        match llm::process_with_rules(backend, &transcript, rules, &language, &dictionary).await {
+                            Ok(processed) => {
+                                println!("[Dictato] Rules applied successfully using {}", backend.display_name());
+                                processing_kind = "rules";
+                                processed
+                            }
+                            Err(e) => {
+                                eprintln!("[Dictato] Rule processing failed, using raw transcript: {}", e);
+                                had_llm_error = true;
+                                show_error(&app, &format_llm_error(&e));
+                                transcript
+                            }
                         }
                     }
-                } else {
-                    // No API key for selected provider - show error and return raw transcript
-                    had_llm_error = true;
-                    show_error(&app, &format!("No {} API key - rules skipped. Raw transcription copied. Add key in Settings to use rules.", provider_name));
-                    transcript
+                    Err(reason) => {
+                        had_llm_error = true;
+                        show_error(&app, &format!("{} - rules skipped. Raw transcription copied.", reason));
+                        transcript
+                    }
                 }
             } else {
                 transcript
@@ -814,42 +816,67 @@ fn get_anthropic_api_key_from_store(app: &AppHandle) -> Option<String> {
 
 fn get_llm_provider_from_store(app: &AppHandle) -> llm::LlmProvider {
     get_store_string(app, store_keys::LLM_PROVIDER)
-        .and_then(|s| match s.as_str() {
-            "openai" => Some(llm::LlmProvider::OpenAI),
-            "google" => Some(llm::LlmProvider::Google),
-            "anthropic" => Some(llm::LlmProvider::Anthropic),
-            _ => None,
-        })
+        .map(|s| llm::LlmProvider::from_store_value(&s))
         .unwrap_or_default()
 }
 
-/// Get the API key for the currently selected LLM provider
-fn get_llm_api_key_for_provider(app: &AppHandle, provider: &llm::LlmProvider) -> Option<String> {
+/// Get the API key for a hosted LLM provider
+fn get_llm_api_key_for_provider(app: &AppHandle, provider: llm::CloudProvider) -> Option<String> {
     match provider {
-        llm::LlmProvider::OpenAI => get_openai_api_key_from_store(app),
-        llm::LlmProvider::Google => get_google_api_key_from_store(app),
-        llm::LlmProvider::Anthropic => get_anthropic_api_key_from_store(app),
+        llm::CloudProvider::OpenAI => get_openai_api_key_from_store(app),
+        llm::CloudProvider::Google => get_google_api_key_from_store(app),
+        llm::CloudProvider::Anthropic => get_anthropic_api_key_from_store(app),
     }
+    .filter(|k| !k.trim().is_empty())
 }
 
-/// Get the user-selected model for a provider, falling back to the provider default
-fn get_llm_model_for_provider(app: &AppHandle, provider: &llm::LlmProvider) -> String {
+/// Get the user-selected model for a hosted provider, falling back to the provider default
+fn get_llm_model_for_provider(app: &AppHandle, provider: llm::CloudProvider) -> String {
     let key = match provider {
-        llm::LlmProvider::OpenAI => store_keys::OPENAI_MODEL,
-        llm::LlmProvider::Google => store_keys::GOOGLE_MODEL,
-        llm::LlmProvider::Anthropic => store_keys::ANTHROPIC_MODEL,
+        llm::CloudProvider::OpenAI => store_keys::OPENAI_MODEL,
+        llm::CloudProvider::Google => store_keys::GOOGLE_MODEL,
+        llm::CloudProvider::Anthropic => store_keys::ANTHROPIC_MODEL,
     };
     get_store_string(app, key)
         .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| llm::default_model(provider).to_string())
+        .unwrap_or_else(|| provider.default_model().to_string())
 }
 
-/// Get the display name for an LLM provider
-fn get_llm_provider_name(provider: &llm::LlmProvider) -> &'static str {
-    match provider {
-        llm::LlmProvider::OpenAI => "OpenAI",
-        llm::LlmProvider::Google => "Google",
-        llm::LlmProvider::Anthropic => "Anthropic",
+/// Turn the selected AI provider into something callable. The error is a
+/// user-facing reason the provider can't be used right now (missing API
+/// key, model not downloaded or still loading).
+fn resolve_llm_backend(app: &AppHandle) -> Result<LlmBackend, String> {
+    match get_llm_provider_from_store(app) {
+        llm::LlmProvider::Cloud(provider) => {
+            let api_key = get_llm_api_key_for_provider(app, provider).ok_or_else(|| {
+                format!(
+                    "No {} API key. Add it in Settings → General",
+                    provider.display_name()
+                )
+            })?;
+            let model = get_llm_model_for_provider(app, provider);
+            Ok(LlmBackend::Cloud {
+                provider,
+                api_key,
+                model,
+            })
+        }
+        llm::LlmProvider::Local(model) => {
+            let engine = app.state::<local_llm::LocalLlmState>().inner().clone();
+            if !models::is_downloaded(app, model) {
+                return Err(format!(
+                    "{} is not downloaded. Get it in Settings → Models",
+                    model.name()
+                ));
+            }
+            if !local_llm::is_model_loaded(&engine, model) {
+                if !models::is_loading(model) {
+                    spawn_load_local_model(app, model);
+                }
+                return Err(format!("{} is still loading, try again in a moment", model.name()));
+            }
+            Ok(LlmBackend::Local { model, engine })
+        }
     }
 }
 
@@ -1136,29 +1163,20 @@ fn resize_floating_window(app: AppHandle, width: f64, height: f64) {
 
 #[tauri::command]
 async fn generate_mode_prompt(app: AppHandle, name: String, description: String) -> Result<String, String> {
-    let provider = get_llm_provider_from_store(&app);
-    let provider_name = get_llm_provider_name(&provider);
-    let api_key = get_llm_api_key_for_provider(&app, &provider)
-        .ok_or_else(|| format!("{} API key required for prompt generation. Add it in Settings.", provider_name))?;
-    let model = get_llm_model_for_provider(&app, &provider);
-    llm::generate_mode_prompt(&provider, &api_key, &model, &name, &description).await
+    let backend = resolve_llm_backend(&app)
+        .map_err(|reason| format!("{} (needed for prompt generation)", reason))?;
+    llm::generate_mode_prompt(&backend, &name, &description).await
 }
 
-/// List selectable chat models for a provider, fetched live from its API.
-/// Uses the API key stored in settings for that provider.
+/// List selectable chat models for a hosted provider, fetched live from its
+/// API. Uses the API key stored in settings for that provider.
 #[tauri::command]
 async fn list_llm_models(app: AppHandle, provider: String) -> Result<Vec<llm::ModelInfo>, String> {
-    let provider = match provider.as_str() {
-        "openai" => llm::LlmProvider::OpenAI,
-        "google" => llm::LlmProvider::Google,
-        "anthropic" => llm::LlmProvider::Anthropic,
-        other => return Err(format!("Unknown LLM provider: {}", other)),
-    };
-    let provider_name = get_llm_provider_name(&provider);
-    let api_key = get_llm_api_key_for_provider(&app, &provider)
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| format!("{} API key required to list models. Add it in Settings.", provider_name))?;
-    llm::list_models(&provider, &api_key).await
+    let provider = llm::CloudProvider::from_id(&provider)
+        .ok_or_else(|| format!("Unknown LLM provider: {}", provider))?;
+    let api_key = get_llm_api_key_for_provider(&app, provider)
+        .ok_or_else(|| format!("{} API key required to list models. Add it in Settings.", provider.display_name()))?;
+    llm::list_models(provider, &api_key).await
 }
 
 // ============== API Key Validation commands ==============
@@ -1186,22 +1204,31 @@ async fn validate_anthropic_key(api_key: String) -> Result<(), String> {
 // ============== Local model commands ==============
 
 fn is_local_model_loaded(app: &AppHandle, model: LocalModel) -> bool {
-    match model {
-        LocalModel::Whisper => whisper::is_model_loaded(&app.state::<whisper::WhisperState>()),
+    match model.kind() {
+        ModelKind::Stt => whisper::is_model_loaded(&app.state::<whisper::WhisperState>()),
+        ModelKind::Llm => local_llm::is_model_loaded(&app.state::<local_llm::LocalLlmState>(), model),
     }
 }
 
 /// Blocking: read `model` from disk into memory.
 fn load_local_model_blocking(app: &AppHandle, model: LocalModel) -> Result<(), String> {
     let dir = models::model_dir(app, model)?;
-    match model {
-        LocalModel::Whisper => whisper::load_model(&app.state::<whisper::WhisperState>(), &dir),
+    match model.kind() {
+        ModelKind::Stt => whisper::load_model(&app.state::<whisper::WhisperState>(), &dir),
+        ModelKind::Llm => local_llm::load_model(&app.state::<local_llm::LocalLlmState>(), model, &dir),
     }
 }
 
 fn unload_local_model(app: &AppHandle, model: LocalModel) {
-    match model {
-        LocalModel::Whisper => whisper::unload_model(&app.state::<whisper::WhisperState>()),
+    match model.kind() {
+        ModelKind::Stt => whisper::unload_model(&app.state::<whisper::WhisperState>()),
+        ModelKind::Llm => {
+            let state = app.state::<local_llm::LocalLlmState>();
+            // One engine holds one LLM; only drop it if it's this model.
+            if local_llm::is_model_loaded(&state, model) {
+                local_llm::unload_model(&state);
+            }
+        }
     }
 }
 
@@ -1220,10 +1247,11 @@ fn transcribe_local_blocking(
             language,
             vocabulary_prompt,
         ),
+        other => Err(format!("{} is not a speech-to-text model", other.name())),
     }
 }
 
-/// Run local inference off the async runtime. The transcribing flag blocks
+/// Run local inference off the async runtime. The in-use flag blocks
 /// model deletion while inference holds the model.
 async fn run_local_transcription(
     app: &AppHandle,
@@ -1232,7 +1260,7 @@ async fn run_local_transcription(
     language: String,
     vocabulary_prompt: Option<String>,
 ) -> Result<String, String> {
-    models::set_transcribing(true);
+    models::set_in_use(model, true);
     let app_clone = app.clone();
     let result = tokio::task::spawn_blocking(move || {
         transcribe_local_blocking(
@@ -1244,7 +1272,7 @@ async fn run_local_transcription(
         )
     })
     .await;
-    models::set_transcribing(false);
+    models::set_in_use(model, false);
     result.map_err(|e| format!("Transcription task failed: {}", e))?
 }
 
@@ -1265,11 +1293,10 @@ fn spawn_load_local_model(app: &AppHandle, model: LocalModel) {
     });
 }
 
-/// Make `provider` the active STT provider: unload every other local model
-/// to free memory and load the selected one if it's on disk.
-fn activate_provider(app: &AppHandle, provider: SttProvider) {
-    let selected = provider.local_model();
-    for model in LocalModel::ALL {
+/// Make `selected` the only loaded model of its kind: unload the others to
+/// free memory and load it if it's on disk.
+fn activate_local_model(app: &AppHandle, kind: ModelKind, selected: Option<LocalModel>) {
+    for model in LocalModel::of_kind(kind) {
         if Some(model) != selected {
             unload_local_model(app, model);
         }
@@ -1282,6 +1309,10 @@ fn activate_provider(app: &AppHandle, provider: SttProvider) {
     models::emit_changed(app);
 }
 
+fn activate_provider(app: &AppHandle, provider: SttProvider) {
+    activate_local_model(app, ModelKind::Stt, provider.local_model());
+}
+
 fn parse_model_id(model_id: &str) -> Result<LocalModel, String> {
     LocalModel::from_id(model_id).ok_or_else(|| format!("Unknown model: {}", model_id))
 }
@@ -1289,6 +1320,7 @@ fn parse_model_id(model_id: &str) -> Result<LocalModel, String> {
 fn is_accelerator_active(app: &AppHandle, model: LocalModel) -> bool {
     match model {
         LocalModel::Whisper => whisper::is_coreml_active(&app.state::<whisper::WhisperState>()),
+        _ => false,
     }
 }
 
@@ -1307,9 +1339,13 @@ fn get_local_models_status(app: AppHandle) -> Vec<models::LocalModelStatus> {
         .collect()
 }
 
-/// Load the model if it's the selected provider; used after downloads.
+/// Load the model if it's the selected provider of its kind; used after downloads.
 fn load_if_selected(app: &AppHandle, model: LocalModel) {
-    if get_stt_provider_from_store(app).local_model() == Some(model) {
+    let selected = match model.kind() {
+        ModelKind::Stt => get_stt_provider_from_store(app).local_model(),
+        ModelKind::Llm => get_llm_provider_from_store(app).local_model(),
+    };
+    if selected == Some(model) {
         spawn_load_local_model(app, model);
     }
 }
@@ -1326,8 +1362,8 @@ async fn download_local_model(app: AppHandle, model_id: String) -> Result<(), St
 #[tauri::command]
 async fn download_model_accelerator(app: AppHandle, model_id: String) -> Result<(), String> {
     let model = parse_model_id(&model_id)?;
-    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
-        return Err("Cannot change models during active recording or transcription".to_string());
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_in_use(model) {
+        return Err("Cannot change models during active recording or processing".to_string());
     }
     models::download(app.clone(), model, true).await?;
     unload_local_model(&app, model);
@@ -1339,8 +1375,8 @@ async fn download_model_accelerator(app: AppHandle, model_id: String) -> Result<
 #[tauri::command]
 async fn delete_model_accelerator(app: AppHandle, model_id: String) -> Result<(), String> {
     let model = parse_model_id(&model_id)?;
-    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
-        return Err("Cannot change models during active recording or transcription".to_string());
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_in_use(model) {
+        return Err("Cannot change models during active recording or processing".to_string());
     }
     unload_local_model(&app, model);
     models::delete_accelerator(&app, model)?;
@@ -1358,8 +1394,8 @@ fn cancel_local_model_download(model_id: String) -> Result<(), String> {
 #[tauri::command]
 async fn delete_local_model(app: AppHandle, model_id: String) -> Result<(), String> {
     let model = parse_model_id(&model_id)?;
-    if IS_RECORDING.load(Ordering::SeqCst) || models::is_transcribing() {
-        return Err("Cannot delete a model during active recording or transcription".to_string());
+    if IS_RECORDING.load(Ordering::SeqCst) || models::is_in_use(model) {
+        return Err("Cannot delete a model while it is recording or processing".to_string());
     }
     if models::is_downloading(model) {
         return Err("Cancel the download first".to_string());
@@ -1374,6 +1410,15 @@ async fn delete_local_model(app: AppHandle, model_id: String) -> Result<(), Stri
 #[tauri::command]
 async fn activate_stt_provider(app: AppHandle, provider: String) {
     activate_provider(&app, SttProvider::from_store_value(&provider));
+}
+
+/// Called by the frontend after it persists a new AI processing provider.
+/// Loads the local model when one is picked and frees it when switching to
+/// a hosted provider.
+#[tauri::command]
+async fn activate_llm_provider(app: AppHandle, provider: String) {
+    let provider = llm::LlmProvider::from_store_value(&provider);
+    activate_local_model(&app, ModelKind::Llm, provider.local_model());
 }
 
 // ============== Autostart commands (Windows only) ==============
@@ -1473,9 +1518,7 @@ async fn transcribe_file(
     }
 
     let stt_provider = get_stt_provider_from_store(&app);
-    let llm_provider = get_llm_provider_from_store(&app);
-    let llm_api_key = get_llm_api_key_for_provider(&app, &llm_provider);
-    let llm_model = get_llm_model_for_provider(&app, &llm_provider);
+    let llm_backend = resolve_llm_backend(&app);
     let dictionary = get_dictionary_from_store(&app);
     let vocabulary_prompt = build_vocabulary_prompt(&dictionary);
 
@@ -1542,10 +1585,10 @@ async fn transcribe_file(
     let processed_text = if !raw_text.is_empty() {
         if let Some(ref mode) = mode_id {
             if let Some(prompt) = get_mode_prompt_from_store(&app, mode) {
-                if let Some(ref llm_key) = llm_api_key {
+                if let Ok(ref backend) = llm_backend {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying mode...");
 
-                    match llm::process_with_prompt(&llm_provider, llm_key, &llm_model, &raw_text, &prompt, &language, &dictionary).await {
+                    match llm::process_with_prompt(backend, &raw_text, &prompt, &language, &dictionary).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -1559,10 +1602,10 @@ async fn transcribe_file(
             let rules = get_transcription_rules_from_store(&app);
             let has_enabled_rules = rules.iter().any(|r| r.enabled);
             if has_enabled_rules {
-                if let Some(ref llm_key) = llm_api_key {
+                if let Ok(ref backend) = llm_backend {
                     emit_transcribe_progress(&app, progress_stages::PROCESSING, progress_percent::PROCESSING, "Applying rules...");
 
-                    match llm::process_with_rules(&llm_provider, llm_key, &llm_model, &raw_text, rules, &language, &dictionary).await {
+                    match llm::process_with_rules(backend, &raw_text, rules, &language, &dictionary).await {
                         Ok(processed) => Some(processed),
                         Err(_) => None,
                     }
@@ -1824,6 +1867,10 @@ fn expand_floating_window(app: &AppHandle) -> Result<(), String> {
 
 /// Format LLM API error into a user-friendly message
 fn format_llm_error(error: &str) -> String {
+    // Local engine errors are already written for the user
+    if error.contains("Local model") || error.contains("Transcript too long") {
+        return error.to_string();
+    }
     // Check for common error patterns and provide user-friendly messages
     if error.contains("429") || error.contains("RESOURCE_EXHAUSTED") || error.contains("quota") {
         return "API quota exceeded. Check your plan and billing.".to_string();
@@ -1969,6 +2016,7 @@ pub fn run() {
         .manage(GroqState::default())
         .manage(AudioCaptureState::default())
         .manage(whisper::WhisperState::default())
+        .manage(local_llm::LocalLlmState::default())
         .manage(keyboard_lock::LockState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -2003,6 +2051,7 @@ pub fn run() {
             cancel_local_model_download,
             delete_local_model,
             activate_stt_provider,
+            activate_llm_provider,
             engage_cleaning_mode,
             get_cleaning_mode_state,
             close_cleaning_overlay,
@@ -2034,6 +2083,14 @@ pub fn run() {
             };
             if !ready {
                 show_main_window(app.handle());
+            }
+
+            // Warm up the local AI model too so the first dictation isn't
+            // delayed by a multi-second load.
+            if let Some(model) = get_llm_provider_from_store(app.handle()).local_model() {
+                if models::is_downloaded(app.handle(), model) {
+                    spawn_load_local_model(app.handle(), model);
+                }
             }
 
             Ok(())

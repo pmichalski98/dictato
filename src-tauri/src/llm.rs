@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::local_llm::{self, LocalLlmState};
+use crate::models::{self, LocalModel, ModelKind};
+
 const LLM_TIMEOUT_SECS: u64 = 30;
 
 // OpenAI
@@ -18,22 +21,134 @@ const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-haiku-4-5";
 const ANTHROPIC_VERSION: &str = "2023-06-01"; // API protocol version
 
-/// LLM provider for text processing
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum LlmProvider {
-    #[default]
+/// Hosted LLM API
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudProvider {
     OpenAI,
     Google,
     Anthropic,
 }
 
-/// Fallback model used when the user hasn't picked one (or the store is empty)
-pub fn default_model(provider: &LlmProvider) -> &'static str {
-    match provider {
-        LlmProvider::OpenAI => DEFAULT_OPENAI_MODEL,
-        LlmProvider::Google => DEFAULT_GOOGLE_MODEL,
-        LlmProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
+impl CloudProvider {
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "openai" => Some(Self::OpenAI),
+            "google" => Some(Self::Google),
+            "anthropic" => Some(Self::Anthropic),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::OpenAI => "OpenAI",
+            Self::Google => "Google",
+            Self::Anthropic => "Anthropic",
+        }
+    }
+
+    /// Fallback model used when the user hasn't picked one (or the store is empty)
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            Self::OpenAI => DEFAULT_OPENAI_MODEL,
+            Self::Google => DEFAULT_GOOGLE_MODEL,
+            Self::Anthropic => DEFAULT_ANTHROPIC_MODEL,
+        }
+    }
+}
+
+/// AI processing provider selected in Settings: a hosted API or a local
+/// GGUF model from the Models page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProvider {
+    Cloud(CloudProvider),
+    Local(LocalModel),
+}
+
+impl Default for LlmProvider {
+    fn default() -> Self {
+        Self::Cloud(CloudProvider::OpenAI)
+    }
+}
+
+impl LlmProvider {
+    /// Store value → provider. Unknown values fall back to the default so a
+    /// removed model never leaves the app without a provider.
+    pub fn from_store_value(s: &str) -> Self {
+        if let Some(cloud) = CloudProvider::from_id(s) {
+            return Self::Cloud(cloud);
+        }
+        match LocalModel::from_id(s) {
+            Some(model) if model.kind() == ModelKind::Llm => Self::Local(model),
+            _ => Self::default(),
+        }
+    }
+
+    pub fn local_model(&self) -> Option<LocalModel> {
+        match self {
+            Self::Local(model) => Some(*model),
+            Self::Cloud(_) => None,
+        }
+    }
+}
+
+/// A ready-to-call LLM: the provider plus everything a request needs.
+/// Built by the app from settings once per processing run.
+#[derive(Clone)]
+pub enum LlmBackend {
+    Cloud {
+        provider: CloudProvider,
+        api_key: String,
+        model: String,
+    },
+    Local {
+        model: LocalModel,
+        engine: LocalLlmState,
+    },
+}
+
+impl LlmBackend {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Cloud { provider, .. } => provider.display_name(),
+            Self::Local { model, .. } => model.name(),
+        }
+    }
+
+    /// One chat completion: system prompt + user content → assistant text.
+    pub async fn chat(&self, system_prompt: &str, user_content: &str) -> Result<String, String> {
+        match self {
+            Self::Cloud {
+                provider,
+                api_key,
+                model,
+            } => call_cloud_chat(*provider, api_key, model, system_prompt, user_content).await,
+            Self::Local { model, engine } => {
+                // Inference is CPU/GPU-bound and blocks; the in-use flag
+                // stops the model from being deleted while it runs.
+                let engine = engine.clone();
+                let system_prompt = system_prompt.to_string();
+                let user_content = user_content.to_string();
+                let model = *model;
+                models::set_in_use(model, true);
+                let result = tokio::task::spawn_blocking(move || {
+                    local_llm::generate(&engine, &system_prompt, &user_content)
+                })
+                .await;
+                models::set_in_use(model, false);
+                // Prefixed so the UI shows engine errors verbatim instead of
+                // the cloud-oriented "check your API key" fallback.
+                result
+                    .map_err(|e| format!("Local model task failed: {}", e))?
+                    .map_err(|e| {
+                        if e.starts_with("Local model") || e.starts_with("Transcript too long") {
+                            e
+                        } else {
+                            format!("Local model error: {}", e)
+                        }
+                    })
+            }
+        }
     }
 }
 
@@ -314,18 +429,18 @@ async fn call_anthropic_chat(
         .ok_or_else(|| "No response from Anthropic".to_string())
 }
 
-/// Unified function to call any LLM provider
-pub async fn call_llm_chat(
-    provider: &LlmProvider,
+/// Call any hosted provider's chat API
+async fn call_cloud_chat(
+    provider: CloudProvider,
     api_key: &str,
     model: &str,
     system_prompt: &str,
     user_content: &str,
 ) -> Result<String, String> {
     match provider {
-        LlmProvider::OpenAI => call_openai_chat(api_key, model, system_prompt, user_content).await,
-        LlmProvider::Google => call_google_chat(api_key, model, system_prompt, user_content).await,
-        LlmProvider::Anthropic => {
+        CloudProvider::OpenAI => call_openai_chat(api_key, model, system_prompt, user_content).await,
+        CloudProvider::Google => call_google_chat(api_key, model, system_prompt, user_content).await,
+        CloudProvider::Anthropic => {
             call_anthropic_chat(api_key, model, system_prompt, user_content).await
         }
     }
@@ -358,14 +473,41 @@ The text is a raw speech-to-text transcript and may contain mis-transcribed word
         ));
     }
 
+    // Small local models weigh the end of the prompt most; without this
+    // closing line Gemma 3 4B rewrote a Polish dictation as an English email
+    // when a mode asked for "professional" output.
+    context.push_str("\n\nOUTPUT LANGUAGE: the same language(s) as the transcript. Never translate");
+    match language_name(language) {
+        Some(name) => context.push_str(&format!("; a {} transcript stays {}.", name, name)),
+        None => context.push('.'),
+    }
+
     context
+}
+
+/// English name for the language codes offered in Settings, for prompts.
+fn language_name(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "en" => "English",
+        "pl" => "Polish",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        "it" => "Italian",
+        "pt" => "Portuguese",
+        "nl" => "Dutch",
+        "ja" => "Japanese",
+        "zh" => "Chinese",
+        "ko" => "Korean",
+        "ru" => "Russian",
+        "uk" => "Ukrainian",
+        _ => return None,
+    })
 }
 
 /// Process transcript with transcription rules
 pub async fn process_with_rules(
-    provider: &LlmProvider,
-    api_key: &str,
-    model: &str,
+    backend: &LlmBackend,
     transcript: &str,
     rules: Vec<TranscriptionRule>,
     language: &str,
@@ -404,14 +546,12 @@ Output ONLY the cleaned-up text with no explanations."#,
         rules_text
     );
 
-    call_llm_chat(provider, api_key, model, &system_prompt, transcript).await
+    backend.chat(&system_prompt, transcript).await
 }
 
 /// Process transcript with a custom system prompt
 pub async fn process_with_prompt(
-    provider: &LlmProvider,
-    api_key: &str,
-    model: &str,
+    backend: &LlmBackend,
     transcript: &str,
     prompt: &str,
     language: &str,
@@ -426,7 +566,7 @@ pub async fn process_with_prompt(
     // mis-transcription repair and language preservation.
     let system_prompt = format!("{}\n\n{}", prompt, build_transcript_context(language, dictionary));
 
-    call_llm_chat(provider, api_key, model, &system_prompt, transcript).await
+    backend.chat(&system_prompt, transcript).await
 }
 
 /// System prompt for the meta-prompt generator
@@ -452,9 +592,7 @@ Generate the system prompt now:"#;
 /// Generate a mode prompt using the meta-prompt approach.
 /// Takes the mode name and description, constructs the full prompt, and calls the LLM.
 pub async fn generate_mode_prompt(
-    provider: &LlmProvider,
-    api_key: &str,
-    model: &str,
+    backend: &LlmBackend,
     name: &str,
     description: &str,
 ) -> Result<String, String> {
@@ -462,7 +600,7 @@ pub async fn generate_mode_prompt(
         .replace("{name}", name)
         .replace("{description}", description);
 
-    call_llm_chat(provider, api_key, model, PROMPT_GENERATOR_SYSTEM, &user_content).await
+    backend.chat(PROMPT_GENERATOR_SYSTEM, &user_content).await
 }
 
 // ===== API Key Validation =====
@@ -755,13 +893,13 @@ async fn list_anthropic_models(api_key: &str) -> Result<Vec<ModelInfo>, String> 
 
 /// Fetch the list of selectable chat models live from the provider
 pub async fn list_models(
-    provider: &LlmProvider,
+    provider: CloudProvider,
     api_key: &str,
 ) -> Result<Vec<ModelInfo>, String> {
     match provider {
-        LlmProvider::OpenAI => list_openai_models(api_key).await,
-        LlmProvider::Google => list_google_models(api_key).await,
-        LlmProvider::Anthropic => list_anthropic_models(api_key).await,
+        CloudProvider::OpenAI => list_openai_models(api_key).await,
+        CloudProvider::Google => list_google_models(api_key).await,
+        CloudProvider::Anthropic => list_anthropic_models(api_key).await,
     }
 }
 

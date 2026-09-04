@@ -24,6 +24,8 @@ import { Switch } from "../ui/switch";
 import {
   LLM_PROVIDERS,
   STT_PROVIDERS,
+  isCloudLlmProvider,
+  type CloudLlmProvider,
   type LlmModelInfo,
   type LlmProvider,
   type SttProvider,
@@ -226,14 +228,14 @@ interface GeneralSectionProps {
   googleApiKey: string;
   anthropicApiKey: string;
   llmProvider: LlmProvider;
-  llmModels: Record<LlmProvider, string>;
+  llmModels: Record<CloudLlmProvider, string>;
   onUpdateSttProvider: (provider: SttProvider) => Promise<void>;
   onSaveGroqApiKey: (key: string) => Promise<void>;
   onSaveOpenaiApiKey: (key: string) => Promise<void>;
   onSaveGoogleApiKey: (key: string) => Promise<void>;
   onSaveAnthropicApiKey: (key: string) => Promise<void>;
   onUpdateLlmProvider: (provider: LlmProvider) => Promise<void>;
-  onUpdateLlmModel: (provider: LlmProvider, model: string) => Promise<void>;
+  onUpdateLlmModel: (provider: CloudLlmProvider, model: string) => Promise<void>;
   /** Download state of every local model, from the Models section */
   localModels: LocalModelStatus[];
   onNavigate: (section: Section) => void;
@@ -265,15 +267,22 @@ export function GeneralSection({
     sttProvider === "groq" ? undefined : modelById.get(sttProvider);
   const hasGoogleKey = !!googleApiKey;
   const hasAnthropicKey = !!anthropicApiKey;
+  const cloudKeys: Record<CloudLlmProvider, boolean> = {
+    openai: hasOpenaiKey,
+    google: hasGoogleKey,
+    anthropic: hasAnthropicKey,
+  };
 
-  const hasActiveProviderKey =
-    llmProvider === "openai"
-      ? hasOpenaiKey
-      : llmProvider === "google"
-      ? hasGoogleKey
-      : hasAnthropicKey;
+  // Local LLMs run on this machine: no key, no model list, just a download
+  const localLlmModels = localModels.filter((m) => m.kind === "llm");
+  const activeLlmModel = isCloudLlmProvider(llmProvider)
+    ? undefined
+    : modelById.get(llmProvider);
+  const cloudLlmProvider = isCloudLlmProvider(llmProvider) ? llmProvider : null;
 
-  const selectedModel = llmModels[llmProvider];
+  const hasActiveProviderKey = cloudLlmProvider ? cloudKeys[cloudLlmProvider] : false;
+
+  const selectedModel = cloudLlmProvider ? llmModels[cloudLlmProvider] : "";
 
   // Model list fetched live from the active provider's API
   const [availableModels, setAvailableModels] = useState<LlmModelInfo[]>([]);
@@ -284,10 +293,10 @@ export function GeneralSection({
     let cancelled = false;
     setAvailableModels([]);
     setModelsError(null);
-    if (!hasActiveProviderKey) return;
+    if (!cloudLlmProvider || !hasActiveProviderKey) return;
 
     setModelsLoading(true);
-    invoke<LlmModelInfo[]>("list_llm_models", { provider: llmProvider })
+    invoke<LlmModelInfo[]>("list_llm_models", { provider: cloudLlmProvider })
       .then((models) => {
         if (!cancelled) setAvailableModels(models);
       })
@@ -304,7 +313,7 @@ export function GeneralSection({
     return () => {
       cancelled = true;
     };
-  }, [llmProvider, hasActiveProviderKey]);
+  }, [cloudLlmProvider, hasActiveProviderKey]);
 
   // Keep the saved model selectable even if it's missing from the fetched list
   // (e.g. a deprecated model or a fetch that returned a partial list)
@@ -313,8 +322,9 @@ export function GeneralSection({
       ? availableModels
       : [{ id: selectedModel, display_name: selectedModel }, ...availableModels];
 
-  const selectedModelLabel =
-    availableModels.find((m) => m.id === selectedModel)?.display_name ?? selectedModel;
+  const selectedModelLabel = cloudLlmProvider
+    ? availableModels.find((m) => m.id === selectedModel)?.display_name ?? selectedModel
+    : activeLlmModel?.name ?? llmProvider;
 
   // Autostart state (Windows only)
   const [isWindows, setIsWindows] = useState(false);
@@ -463,19 +473,16 @@ export function GeneralSection({
         <div className="space-y-1.5">
           <Label>Active Provider</Label>
           <p className="text-[11px] text-muted-foreground">
-            Choose which AI model processes your transcriptions
+            Choose which AI model processes your transcriptions. Local models
+            keep your text on this machine and become selectable once
+            downloaded.
           </p>
           <Select
             value={llmProvider}
             onChange={(e) => onUpdateLlmProvider(e.target.value as LlmProvider)}
           >
             {Object.values(LLM_PROVIDERS).map((provider) => {
-              const hasKey =
-                provider.id === "openai"
-                  ? hasOpenaiKey
-                  : provider.id === "google"
-                  ? hasGoogleKey
-                  : hasAnthropicKey;
+              const hasKey = cloudKeys[provider.id];
               return (
                 <option
                   key={provider.id}
@@ -487,37 +494,84 @@ export function GeneralSection({
                 </option>
               );
             })}
+            {localLlmModels.map((model) => (
+              <option
+                key={model.id}
+                value={model.id}
+                disabled={!model.downloaded && llmProvider !== model.id}
+              >
+                {model.name} — Local
+                {!model.downloaded ? " (not downloaded)" : ""}
+              </option>
+            ))}
           </Select>
         </div>
 
-        <div className="space-y-1.5">
-          <Label>Model</Label>
-          <p className="text-[11px] text-muted-foreground">
-            Models are fetched live from {LLM_PROVIDERS[llmProvider].name}
-          </p>
-          <Select
-            value={selectedModel}
-            disabled={modelsLoading || !hasActiveProviderKey}
-            onChange={(e) => onUpdateLlmModel(llmProvider, e.target.value)}
-          >
-            {modelsLoading ? (
-              <option value={selectedModel}>Loading models...</option>
-            ) : modelOptions.length > 0 ? (
-              modelOptions.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.display_name}
-                </option>
-              ))
-            ) : (
-              <option value={selectedModel}>{selectedModel}</option>
-            )}
-          </Select>
-          {modelsError && (
-            <p className="text-[11px] text-destructive">
-              Could not fetch models — using {selectedModel}. {modelsError}
+        {cloudLlmProvider ? (
+          <div className="space-y-1.5">
+            <Label>Model</Label>
+            <p className="text-[11px] text-muted-foreground">
+              Models are fetched live from {LLM_PROVIDERS[cloudLlmProvider].name}
             </p>
-          )}
-        </div>
+            <Select
+              value={selectedModel}
+              disabled={modelsLoading || !hasActiveProviderKey}
+              onChange={(e) => onUpdateLlmModel(cloudLlmProvider, e.target.value)}
+            >
+              {modelsLoading ? (
+                <option value={selectedModel}>Loading models...</option>
+              ) : modelOptions.length > 0 ? (
+                modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.display_name}
+                  </option>
+                ))
+              ) : (
+                <option value={selectedModel}>{selectedModel}</option>
+              )}
+            </Select>
+            {modelsError && (
+              <p className="text-[11px] text-destructive">
+                Could not fetch models — using {selectedModel}. {modelsError}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
+            <div className="flex items-center gap-2 min-w-0">
+              {activeLlmModel?.loading ? (
+                <Loader2 size={ICON_SIZES.xs} className="animate-spin text-muted-foreground shrink-0" />
+              ) : (
+                <div
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    activeLlmModel?.loaded
+                      ? "bg-green-500 animate-pulse"
+                      : activeLlmModel?.downloaded
+                      ? "bg-amber-500"
+                      : "bg-destructive"
+                  }`}
+                />
+              )}
+              <span className="text-[11px] text-muted-foreground truncate">
+                {activeLlmModel?.loading
+                  ? "Loading model into memory..."
+                  : activeLlmModel?.loaded
+                  ? "Model ready"
+                  : activeLlmModel?.downloaded
+                  ? "Model downloaded, not loaded"
+                  : "Model not downloaded"}
+              </span>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onNavigate("models")}
+            >
+              <HardDrive size={ICON_SIZES.xs} className="mr-1" />
+              Manage models
+            </Button>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 px-2.5 py-2 rounded-md bg-muted/30 border border-border/50">
           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />

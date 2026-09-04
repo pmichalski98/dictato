@@ -1,11 +1,14 @@
-//! Registry of downloadable local speech-to-text models.
+//! Registry of downloadable local models: speech-to-text engines and the
+//! language models that clean up transcripts.
 //!
-//! Every local engine is described here by a [`ModelSpec`]: where its files
+//! Every local model is described here by a [`ModelSpec`]: where its files
 //! live on Hugging Face, how big they are, and which languages it handles.
 //! Downloading, deleting, and status reporting are generic over the spec so
 //! the engines themselves only deal with inference. Whisper is the only
-//! engine today; Parakeet, Canary and Cohere Transcribe were evaluated and
-//! dropped because Whisper beat them on Polish accuracy.
+//! speech-to-text engine; Parakeet, Canary and Cohere Transcribe were
+//! evaluated and dropped because Whisper beat them on Polish accuracy. The
+//! LLMs are GGUF files run by `local_llm.rs` (llama.cpp); see that module
+//! for how they were picked.
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -22,10 +25,24 @@ pub const EVENT_MODELS_CHANGED: &str = "local-models-changed";
 /// Minimum interval between download progress events
 const PROGRESS_THROTTLE_MS: u128 = 100;
 
+/// What a local model is used for. Determines which engine loads it and
+/// which Settings provider it can be selected as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum ModelKind {
+    /// Speech-to-text (dictation transcription)
+    Stt,
+    /// Text LLM (rules and modes)
+    Llm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum LocalModel {
     Whisper,
+    Gemma4E2b,
+    Gemma4E4b,
+    Bielik4_5b,
 }
 
 /// One downloadable file of a model.
@@ -56,10 +73,12 @@ pub struct Accelerator {
 }
 
 pub struct ModelSpec {
+    pub kind: ModelKind,
     pub name: &'static str,
     pub description: &'static str,
     pub languages: &'static str,
     pub dir_name: &'static str,
+    /// For LLMs the first file is the GGUF weights.
     pub files: &'static [ModelFile],
     /// Optional speed-up the user can add on top of the required files.
     pub accelerator: Option<&'static Accelerator>,
@@ -86,6 +105,7 @@ const WHISPER_COREML_ENCODER: Accelerator = Accelerator {
 };
 
 const WHISPER_SPEC: ModelSpec = ModelSpec {
+    kind: ModelKind::Stt,
     name: "Whisper large-v3-turbo",
     description: "OpenAI Whisper, q5_0 quantized, Metal GPU on macOS. Auto-detects language and supports dictionary biasing.",
     languages: "99 languages, auto-detect",
@@ -102,30 +122,105 @@ const WHISPER_SPEC: ModelSpec = ModelSpec {
     accelerator: None,
 };
 
+// ============== Local LLMs (GGUF, llama.cpp) ==============
+//
+// Chosen for transcript cleanup in Polish and English on a laptop: small
+// enough to load in a second and answer in 1-2 s, big enough to follow
+// "output only the cleaned text" and keep mixed-language dictation
+// untranslated. Tested and dropped (Sept 2026): Gemma 3 4B and Qwen3 4B
+// (fine but slower and slightly worse than Gemma 4 E2B), Qwen3.5 2B/4B
+// (recurrent architecture defeats the KV-cache tricks that make requests
+// fast; 2B also makes Polish mistakes), PLLuM 4B (translated English to
+// Polish), Qwen3 1.7B and Gemma 3 1B (echo the input or translate it).
+// Bielik 4.5B made Polish typos and wrote an English email in the same
+// test but is kept as a Polish-specialist option to compare against.
+
+const GEMMA4_E2B_SPEC: ModelSpec = ModelSpec {
+    kind: ModelKind::Llm,
+    name: "Gemma 4 E2B",
+    description: "Google Gemma 4 E2B instruct, QAT Q4_K_XL. Best quality and speed of the local options; recommended.",
+    languages: "140+ languages",
+    dir_name: "models/gemma-4-e2b",
+    files: &[ModelFile {
+        url: "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        local_name: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        size_bytes: 2_620_370_976,
+        unzip_to: None,
+    }],
+    accelerator: None,
+};
+
+const GEMMA4_E4B_SPEC: ModelSpec = ModelSpec {
+    kind: ModelKind::Llm,
+    name: "Gemma 4 E4B",
+    description: "Google Gemma 4 E4B instruct, QAT Q4_K_XL. Bigger sibling of E2B for harder modes; about half the speed.",
+    languages: "140+ languages",
+    dir_name: "models/gemma-4-e4b",
+    files: &[ModelFile {
+        url: "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        local_name: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        size_bytes: 4_215_695_776,
+        unzip_to: None,
+    }],
+    accelerator: None,
+};
+
+const BIELIK_4_5B_SPEC: ModelSpec = ModelSpec {
+    kind: ModelKind::Llm,
+    name: "Bielik 4.5B v3",
+    description: "SpeakLeash Bielik 4.5B v3 instruct, Q5_K_M. Polish-first model; weaker at English and slower than Gemma 4 in our tests, offered for comparison.",
+    languages: "Polish, English",
+    dir_name: "models/bielik-4.5b",
+    files: &[ModelFile {
+        url: "https://huggingface.co/second-state/Bielik-4.5B-v3.0-Instruct-GGUF/resolve/main/Bielik-4.5B-v3.0-Instruct-Q5_K_M.gguf",
+        local_name: "Bielik-4.5B-v3.0-Instruct-Q5_K_M.gguf",
+        size_bytes: 3_378_598_912,
+        unzip_to: None,
+    }],
+    accelerator: None,
+};
+
 impl LocalModel {
-    pub const ALL: [LocalModel; 1] = [LocalModel::Whisper];
+    pub const ALL: [LocalModel; 4] = [
+        LocalModel::Whisper,
+        LocalModel::Gemma4E2b,
+        LocalModel::Gemma4E4b,
+        LocalModel::Bielik4_5b,
+    ];
 
     pub fn id(&self) -> &'static str {
         match self {
             LocalModel::Whisper => "whisper",
+            LocalModel::Gemma4E2b => "gemma-4-e2b",
+            LocalModel::Gemma4E4b => "gemma-4-e4b",
+            LocalModel::Bielik4_5b => "bielik-4.5b",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "whisper" => Some(LocalModel::Whisper),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|m| m.id() == id)
     }
 
     pub fn spec(&self) -> &'static ModelSpec {
         match self {
             LocalModel::Whisper => &WHISPER_SPEC,
+            LocalModel::Gemma4E2b => &GEMMA4_E2B_SPEC,
+            LocalModel::Gemma4E4b => &GEMMA4_E4B_SPEC,
+            LocalModel::Bielik4_5b => &BIELIK_4_5B_SPEC,
         }
     }
 
     pub fn name(&self) -> &'static str {
         self.spec().name
+    }
+
+    pub fn kind(&self) -> ModelKind {
+        self.spec().kind
+    }
+
+    /// Every model of one kind, in display order.
+    pub fn of_kind(kind: ModelKind) -> impl Iterator<Item = LocalModel> {
+        Self::ALL.into_iter().filter(move |m| m.kind() == kind)
     }
 }
 
@@ -139,8 +234,8 @@ pub enum SttProvider {
 impl SttProvider {
     pub fn from_store_value(s: &str) -> Self {
         match LocalModel::from_id(s) {
-            Some(model) => Self::Local(model),
-            None => Self::Groq,
+            Some(model) if model.kind() == ModelKind::Stt => Self::Local(model),
+            _ => Self::Groq,
         }
     }
 
@@ -154,15 +249,24 @@ impl SttProvider {
 
 // ============== Runtime flags ==============
 
-/// Flag to prevent model deletion during active transcription.
-static IS_TRANSCRIBING: AtomicBool = AtomicBool::new(false);
+/// Models currently running inference, so they can't be deleted or
+/// unloaded underneath the engine.
+static IN_USE: Lazy<Mutex<HashMap<LocalModel, ()>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub fn set_transcribing(active: bool) {
-    IS_TRANSCRIBING.store(active, Ordering::SeqCst);
+pub fn set_in_use(model: LocalModel, active: bool) {
+    let mut guard = IN_USE.lock().unwrap_or_else(|p| p.into_inner());
+    if active {
+        guard.insert(model, ());
+    } else {
+        guard.remove(&model);
+    }
 }
 
-pub fn is_transcribing() -> bool {
-    IS_TRANSCRIBING.load(Ordering::SeqCst)
+pub fn is_in_use(model: LocalModel) -> bool {
+    IN_USE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .contains_key(&model)
 }
 
 /// Models currently being loaded into memory (so the UI can show a spinner).
@@ -338,6 +442,7 @@ pub struct AcceleratorStatus {
 #[serde(rename_all = "camelCase")]
 pub struct LocalModelStatus {
     pub id: &'static str,
+    pub kind: ModelKind,
     pub name: &'static str,
     pub description: &'static str,
     pub languages: &'static str,
@@ -362,6 +467,7 @@ pub fn status(
     let disk = model_dir(app, model).map(|d| disk_bytes(&d)).unwrap_or(0);
     LocalModelStatus {
         id: model.id(),
+        kind: spec.kind,
         name: spec.name,
         description: spec.description,
         languages: spec.languages,
@@ -413,6 +519,17 @@ pub async fn download(
     end_download(model);
     emit_changed(&app);
     result
+}
+
+/// File size announced by a HEAD response. `Response::content_length()`
+/// can't be used: reqwest derives it from the body, which is empty for
+/// HEAD, so it reports 0 and the progress bar never moves. Hugging Face
+/// also sends the size of an LFS file as `x-linked-size`.
+fn header_size(resp: &reqwest::Response) -> Option<u64> {
+    ["content-length", "x-linked-size"]
+        .iter()
+        .filter_map(|name| resp.headers().get(*name)?.to_str().ok()?.parse::<u64>().ok())
+        .find(|&size| size > 0)
 }
 
 /// Extract a zip archive into `dir` with the system unzip, then remove the
@@ -486,7 +603,7 @@ async fn download_inner(
     for file in &pending {
         let size = match client.head(file.url).send().await {
             Ok(resp) if resp.status().is_success() => {
-                resp.content_length().unwrap_or(file.size_bytes)
+                header_size(&resp).unwrap_or(file.size_bytes)
             }
             _ => file.size_bytes,
         };

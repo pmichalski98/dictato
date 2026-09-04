@@ -11,8 +11,10 @@ export { DEFAULT_MODES };
 
 // STT Provider types
 /** Local model ids — must match `LocalModel::id()` in src-tauri/src/models.rs */
-export type LocalModelId = "whisper";
-export type SttProvider = "groq" | LocalModelId;
+export type LocalSttModelId = "whisper";
+export type LocalLlmModelId = "gemma-4-e2b" | "gemma-4-e4b" | "bielik-4.5b";
+export type LocalModelId = LocalSttModelId | LocalLlmModelId;
+export type SttProvider = "groq" | LocalSttModelId;
 
 export const STT_PROVIDERS = {
   groq: {
@@ -30,7 +32,13 @@ export const STT_PROVIDERS = {
 } as const;
 
 // LLM Provider types
-export type LlmProvider = "openai" | "google" | "anthropic";
+export type CloudLlmProvider = "openai" | "google" | "anthropic";
+/** Hosted API or a local model downloaded on the Models page */
+export type LlmProvider = CloudLlmProvider | LocalLlmModelId;
+
+export function isCloudLlmProvider(provider: LlmProvider): provider is CloudLlmProvider {
+  return provider in LLM_PROVIDERS;
+}
 
 export const LLM_PROVIDERS = {
   openai: {
@@ -86,8 +94,8 @@ interface Settings {
   googleApiKey: string;
   anthropicApiKey: string;
   llmProvider: LlmProvider;
-  /** Selected model per provider (model id as reported by the provider's API) */
-  llmModels: Record<LlmProvider, string>;
+  /** Selected model per hosted provider (model id as reported by the provider's API) */
+  llmModels: Record<CloudLlmProvider, string>;
   language: string;
   shortcut: string;
   cancelShortcut: string;
@@ -172,7 +180,7 @@ function parseBoolSetting(raw: string | undefined | null, defaultValue: boolean)
 
 const store = new LazyStore("settings.json");
 
-const LLM_MODEL_STORE_KEYS: Record<LlmProvider, string> = {
+const LLM_MODEL_STORE_KEYS: Record<CloudLlmProvider, string> = {
   openai: STORE_KEYS.OPENAI_MODEL,
   google: STORE_KEYS.GOOGLE_MODEL,
   anthropic: STORE_KEYS.ANTHROPIC_MODEL,
@@ -332,7 +340,7 @@ export function useSettings() {
     }
   }, []);
 
-  const updateLlmModel = useCallback(async (provider: LlmProvider, model: string) => {
+  const updateLlmModel = useCallback(async (provider: CloudLlmProvider, model: string) => {
     try {
       await store.set(LLM_MODEL_STORE_KEYS[provider], model);
       setSettings((prev) => ({
@@ -348,6 +356,8 @@ export function useSettings() {
     try {
       await store.set(STORE_KEYS.LLM_PROVIDER, llmProvider);
       setSettings((prev) => ({ ...prev, llmProvider }));
+      // Backend loads the local model (or frees it when switching to cloud)
+      await invoke("activate_llm_provider", { provider: llmProvider });
     } catch (err) {
       console.error("Failed to save LLM provider:", err);
     }

@@ -16,14 +16,48 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../ui/alert-dialog";
-import type { LocalModelsApi, LocalModelStatus } from "@/hooks/useLocalModels";
-import type { LocalModelId, SttProvider } from "@/hooks/useSettings";
+import type {
+  LocalModelKind,
+  LocalModelsApi,
+  LocalModelStatus,
+} from "@/hooks/useLocalModels";
+import type {
+  LlmProvider,
+  LocalLlmModelId,
+  LocalModelId,
+  LocalSttModelId,
+  SttProvider,
+} from "@/hooks/useSettings";
 
 interface ModelsSectionProps {
   localModels: LocalModelsApi;
   sttProvider: SttProvider;
+  llmProvider: LlmProvider;
   onUpdateSttProvider: (provider: SttProvider) => Promise<void>;
+  onUpdateLlmProvider: (provider: LlmProvider) => Promise<void>;
 }
+
+/** What selecting a model of each kind means to the user */
+const KIND_LABELS: Record<
+  LocalModelKind,
+  { title: string; description: string; use: string; used: string; role: string }
+> = {
+  stt: {
+    title: "Speech-to-text",
+    description: "Transcribes your dictation. Alternative to Groq Cloud.",
+    use: "Use for dictation",
+    used: "Used for dictation",
+    role: "dictation model",
+  },
+  llm: {
+    title: "AI processing",
+    description:
+      "Applies rules and modes to the transcript. Alternative to OpenAI, Google and Anthropic. Only the selected model is kept in memory.",
+    use: "Use for AI processing",
+    used: "Used for AI processing",
+    role: "AI processing model",
+  },
+};
 
 type StatusTone = "green" | "amber" | "blue" | "muted";
 
@@ -197,11 +231,11 @@ function ModelCard({
           {isSelected ? (
             <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Check size={ICON_SIZES.xs} className="text-green-500" />
-              Used for dictation
+              {KIND_LABELS[model.kind].used}
             </span>
           ) : (
             <Button variant="secondary" size="sm" onClick={onSelect}>
-              Use for dictation
+              {KIND_LABELS[model.kind].use}
             </Button>
           )}
 
@@ -223,7 +257,7 @@ function ModelCard({
                 <AlertDialogDescription>
                   This removes {formatBytes(model.diskBytes)} from disk.
                   {isSelected
-                    ? " It is your current dictation model, so recording will stop working until you pick another provider or download it again."
+                    ? ` It is your current ${KIND_LABELS[model.kind].role}, so that feature will stop working until you pick another provider or download it again.`
                     : " You can download it again at any time."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -264,7 +298,9 @@ function ModelCard({
 export function ModelsSection({
   localModels,
   sttProvider,
+  llmProvider,
   onUpdateSttProvider,
+  onUpdateLlmProvider,
 }: ModelsSectionProps) {
   const {
     models,
@@ -279,17 +315,26 @@ export function ModelsSection({
   const diskTotal = models.reduce((sum, m) => sum + m.diskBytes, 0);
   const downloadedCount = models.filter((m) => m.downloaded).length;
 
+  const isSelected = (model: LocalModelStatus) =>
+    model.kind === "stt" ? sttProvider === model.id : llmProvider === model.id;
+  const select = (model: LocalModelStatus) =>
+    model.kind === "stt"
+      ? onUpdateSttProvider(model.id as LocalSttModelId)
+      : onUpdateLlmProvider(model.id as LocalLlmModelId);
+
+  const groups: LocalModelKind[] = ["stt", "llm"];
+
   return (
     <SectionLayout
       title="Models"
-      description="Download and manage local speech-to-text models"
+      description="Download and manage local speech-to-text and AI models"
     >
       <Card className="flex items-center justify-between gap-3">
         <div className="space-y-1">
           <Label>Local models</Label>
           <p className="text-[11px] text-muted-foreground">
-            Models run fully on this machine. Only the model selected under
-            General is kept in memory.
+            Models run fully on this machine; nothing leaves your computer.
+            Only the models selected under General are kept in memory.
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -309,21 +354,37 @@ export function ModelsSection({
         </div>
       )}
 
-      {models.map((model) => (
-        <ModelCard
-          key={model.id}
-          model={model}
-          isSelected={sttProvider === model.id}
-          progress={progress[model.id]}
-          error={errors[model.id]}
-          onDownload={() => download(model.id)}
-          onCancel={() => cancel(model.id)}
-          onDelete={() => remove(model.id)}
-          onSelect={() => onUpdateSttProvider(model.id)}
-          onDownloadAccelerator={() => downloadAccelerator(model.id)}
-          onRemoveAccelerator={() => removeAccelerator(model.id)}
-        />
-      ))}
+      {groups.map((kind) => {
+        const group = models.filter((m) => m.kind === kind);
+        if (group.length === 0) return null;
+        return (
+          <div key={kind} className="space-y-3">
+            <div className="space-y-0.5 px-1 pt-2">
+              <Label className="text-[12px] text-foreground">
+                {KIND_LABELS[kind].title}
+              </Label>
+              <p className="text-[11px] text-muted-foreground">
+                {KIND_LABELS[kind].description}
+              </p>
+            </div>
+            {group.map((model) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                isSelected={isSelected(model)}
+                progress={progress[model.id]}
+                error={errors[model.id]}
+                onDownload={() => download(model.id)}
+                onCancel={() => cancel(model.id)}
+                onDelete={() => remove(model.id)}
+                onSelect={() => select(model)}
+                onDownloadAccelerator={() => downloadAccelerator(model.id)}
+                onRemoveAccelerator={() => removeAccelerator(model.id)}
+              />
+            ))}
+          </div>
+        );
+      })}
     </SectionLayout>
   );
 }

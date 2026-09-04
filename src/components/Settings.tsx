@@ -1,4 +1,4 @@
-import { useSettings } from "../hooks/useSettings";
+import { isCloudLlmProvider, useSettings } from "../hooks/useSettings";
 import { useNavigation } from "../hooks/useNavigation";
 import { useLocalModels } from "../hooks/useLocalModels";
 import { AppLayout } from "./layout/AppLayout";
@@ -60,6 +60,17 @@ export function Settings({
 
   const localModels = useLocalModels();
 
+  // Whether rules and modes can actually run with the selected AI provider
+  const llmReady = isCloudLlmProvider(settings.llmProvider)
+    ? !!{
+        openai: settings.openaiApiKey,
+        google: settings.googleApiKey,
+        anthropic: settings.anthropicApiKey,
+      }[settings.llmProvider]
+    : localModels.models.some(
+        (m) => m.id === settings.llmProvider && m.downloaded
+      );
+
   if (isSettingsLoading || isNavLoading) {
     return (
       <div className="min-h-screen bg-background p-5 flex items-center justify-center text-muted-foreground text-[13px]">
@@ -103,7 +114,9 @@ export function Settings({
         <ModelsSection
           localModels={localModels}
           sttProvider={settings.sttProvider}
+          llmProvider={settings.llmProvider}
           onUpdateSttProvider={updateSttProvider}
+          onUpdateLlmProvider={updateLlmProvider}
         />
       </div>
 
@@ -132,7 +145,7 @@ export function Settings({
           customModes={settings.customModes}
           activeMode={settings.activeMode}
           deletedBuiltInModes={settings.deletedBuiltInModes}
-          hasOpenaiKey={!!settings.openaiApiKey}
+          llmReady={llmReady}
           onToggle={toggleRule}
           onAdd={addRule}
           onUpdate={updateRule}
