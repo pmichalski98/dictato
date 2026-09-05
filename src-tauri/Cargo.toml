@@ -35,15 +35,16 @@ tauri-plugin-os = "2"
 regex = "1"
 once_cell = "1"
 whisper-rs = "0.16"
-# Local LLM inference (GGUF). Shares one ggml with whisper-rs: both -sys crates
-# emit `-lggml`, and the linker resolves it from whichever search path comes
-# first (llama.cpp's, the newer of the two). Verified to run both engines.
-llama-cpp-2 = { version = "0.1.156", default-features = false }
-encoding_rs = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 core-foundation = "0.10"
 # CoreML runs the encoder on the Neural Engine; whisper.cpp falls back to Metal if the mlmodelc is missing
 whisper-rs = { version = "0.16", features = ["metal", "coreml"] }
+# Local LLM inference (GGUF), macOS only. whisper-rs and llama-cpp-2 both
+# bundle ggml; ld64 resolves the shared `-lggml` to one archive (llama.cpp's,
+# the newer) and both engines run fine on it. rust-lld and MSVC link both
+# copies from the rlibs and fail with duplicate symbols, so Windows/Linux
+# would need the LLM in a sidecar process. See local_llm.rs.
 llama-cpp-2 = { version = "0.1.156", default-features = false, features = ["metal"] }
+encoding_rs = "0.8"

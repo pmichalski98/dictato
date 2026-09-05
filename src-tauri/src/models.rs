@@ -181,12 +181,18 @@ const BIELIK_4_5B_SPEC: ModelSpec = ModelSpec {
 };
 
 impl LocalModel {
+    /// Every model the app can offer. LLMs are macOS only for now: the
+    /// in-process llama.cpp engine can't be linked next to whisper.cpp on
+    /// Windows/Linux (see local_llm.rs), so those builds don't list them.
+    #[cfg(target_os = "macos")]
     pub const ALL: [LocalModel; 4] = [
         LocalModel::Whisper,
         LocalModel::Gemma4E2b,
         LocalModel::Gemma4E4b,
         LocalModel::Bielik4_5b,
     ];
+    #[cfg(not(target_os = "macos"))]
+    pub const ALL: [LocalModel; 1] = [LocalModel::Whisper];
 
     pub fn id(&self) -> &'static str {
         match self {
