@@ -5,6 +5,7 @@ mod llm;
 mod local_audio;
 mod local_llm;
 mod models;
+mod repeats;
 mod transcribe;
 mod whisper;
 
@@ -281,6 +282,19 @@ async fn stop_recording(app: AppHandle) -> Result<(), String> {
                 }
             }
         }
+    };
+
+    // Trim STT repetition loops before any LLM sees them; see `repeats`.
+    let transcript = {
+        let collapsed = repeats::collapse_runs(&transcript);
+        if collapsed.len() != transcript.len() {
+            println!(
+                "[Dictato] Collapsed repeated fragments in transcript ({} -> {} chars)",
+                transcript.len(),
+                collapsed.len()
+            );
+        }
+        collapsed
     };
 
     // Apply mode transformation or rules (modes take priority over rules)
@@ -1580,6 +1594,7 @@ async fn transcribe_file(
             groq::transcribe_file(&groq_api_key, &audio_path, &language, vocabulary_prompt.as_deref()).await?
         }
     };
+    let raw_text = repeats::collapse_runs(&raw_text);
 
     // Apply mode or rules if requested
     let processed_text = if !raw_text.is_empty() {

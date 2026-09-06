@@ -43,6 +43,9 @@ const SILENCE_RATIO: f32 = 0.1;
 const SILENCE_FLOOR_RMS: f32 = 0.005;
 /// Audio kept before the first detected speech frame.
 const SPEECH_LEAD_IN_SECS: f32 = 0.2;
+/// Step between temperature retries; 0.4 gives three attempts (0, 0.4, 0.8)
+/// instead of whisper.cpp's default six.
+const TEMPERATURE_INC: f32 = 0.4;
 
 struct Engine {
     /// Kept alive for `main_state`; a Core ML encoder is attached on macOS
@@ -289,9 +292,15 @@ fn run_inference(
     // "auto" only reaches here when detect_language declined to decide.
     params.set_language(Some(language));
 
-    // Performance: disable temperature retry schedule (default retries up to 6x)
+    // Greedy first, then up to two sampled retries (t = 0.4, 0.8) for a
+    // window that fails whisper.cpp's checks. Those checks (token entropy
+    // below `entropy_thold`, i.e. a repetition loop, or a low average
+    // logprob on speech) only run when another attempt is available, so
+    // `temperature_inc = 0` silently accepted "warto warto warto..." loops
+    // whenever the window contained a long pause. A window that decodes
+    // cleanly still costs one pass, so normal dictation is not slower.
     params.set_temperature(0.0);
-    params.set_temperature_inc(0.0);
+    params.set_temperature_inc(TEMPERATURE_INC);
 
     // No cross-segment context carryover needed for dictation
     params.set_no_context(true);
