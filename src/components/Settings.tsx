@@ -33,6 +33,7 @@ export function Settings({
     updateLlmProvider,
     updateLlmModel,
     updateLanguage,
+    updateAutoDetectLanguages,
     updateShortcut,
     updateCancelShortcut,
     updateMicrophoneDeviceId,
@@ -123,6 +124,7 @@ export function Settings({
       <div className={activeSection === "recording" ? "block" : "hidden"}>
         <RecordingSection
           language={settings.language}
+          autoDetectLanguages={settings.autoDetectLanguages}
           microphoneDeviceId={settings.microphoneDeviceId}
           autoPaste={settings.autoPaste}
           purePasteEnabled={settings.purePasteEnabled}
@@ -130,6 +132,7 @@ export function Settings({
           shortcut={settings.shortcut}
           cancelShortcut={settings.cancelShortcut}
           onUpdateLanguage={updateLanguage}
+          onUpdateAutoDetectLanguages={updateAutoDetectLanguages}
           onUpdateMicrophoneDeviceId={updateMicrophoneDeviceId}
           onUpdateAutoPaste={updateAutoPaste}
           onUpdatePurePasteEnabled={updatePurePasteEnabled}

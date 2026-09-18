@@ -64,6 +64,7 @@ mod store_keys {
     pub const ANTHROPIC_MODEL: &str = "anthropicModel";
     pub const LLM_PROVIDER: &str = "llmProvider";
     pub const LANGUAGE: &str = "language";
+    pub const AUTO_DETECT_LANGUAGES: &str = "autoDetectLanguages";
     pub const CANCEL_SHORTCUT: &str = "cancelShortcut";
     pub const AUTO_PASTE: &str = "autoPaste";
     pub const MICROPHONE_DEVICE_ID: &str = "microphoneDeviceId";
@@ -904,6 +905,13 @@ fn get_language_from_store(app: &AppHandle) -> String {
     get_store_string(app, store_keys::LANGUAGE).unwrap_or_else(|| "en".to_string())
 }
 
+/// Codes that "auto" language detection may choose between; empty = any.
+fn get_auto_detect_languages_from_store(app: &AppHandle) -> Vec<String> {
+    get_store_string(app, store_keys::AUTO_DETECT_LANGUAGES)
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+}
+
 fn get_cancel_shortcut_from_store(app: &AppHandle) -> String {
     get_store_string(app, store_keys::CANCEL_SHORTCUT).unwrap_or_else(|| "Escape".to_string())
 }
@@ -1259,6 +1267,7 @@ fn transcribe_local_blocking(
             &app.state::<whisper::WhisperState>(),
             samples,
             language,
+            &get_auto_detect_languages_from_store(app),
             vocabulary_prompt,
         ),
         other => Err(format!("{} is not a speech-to-text model", other.name())),

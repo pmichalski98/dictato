@@ -97,6 +97,8 @@ interface Settings {
   /** Selected model per hosted provider (model id as reported by the provider's API) */
   llmModels: Record<CloudLlmProvider, string>;
   language: string;
+  /** ISO 639-1 codes "auto" may pick between; empty = any language */
+  autoDetectLanguages: string[];
   shortcut: string;
   cancelShortcut: string;
   microphoneDeviceId: string;
@@ -160,6 +162,7 @@ const DEFAULT_SETTINGS: Settings = {
     anthropic: LLM_PROVIDERS.anthropic.defaultModel,
   },
   language: "en",
+  autoDetectLanguages: [],
   shortcut: "CommandOrControl+Shift+Space",
   cancelShortcut: "Escape",
   microphoneDeviceId: "",
@@ -203,6 +206,7 @@ export function useSettings() {
         const googleModel = await store.get<string>(STORE_KEYS.GOOGLE_MODEL);
         const anthropicModel = await store.get<string>(STORE_KEYS.ANTHROPIC_MODEL);
         const language = await store.get<string>(STORE_KEYS.LANGUAGE);
+        const autoDetectLanguagesJson = await store.get<string>(STORE_KEYS.AUTO_DETECT_LANGUAGES);
         const shortcut = await store.get<string>(STORE_KEYS.SHORTCUT);
         const cancelShortcut = await store.get<string>(STORE_KEYS.CANCEL_SHORTCUT);
         const microphoneDeviceId = await store.get<string>(STORE_KEYS.MICROPHONE_DEVICE_ID);
@@ -241,6 +245,15 @@ export function useSettings() {
           }
         }
 
+        let autoDetectLanguages: string[] = [];
+        if (autoDetectLanguagesJson) {
+          try {
+            autoDetectLanguages = JSON.parse(autoDetectLanguagesJson);
+          } catch {
+            console.error("Failed to parse auto-detect languages");
+          }
+        }
+
         setSettings({
           sttProvider: (sttProvider as SttProvider) ?? DEFAULT_SETTINGS.sttProvider,
           groqApiKey: groqApiKey ?? DEFAULT_SETTINGS.groqApiKey,
@@ -254,6 +267,7 @@ export function useSettings() {
             anthropic: anthropicModel || DEFAULT_SETTINGS.llmModels.anthropic,
           },
           language: language ?? DEFAULT_SETTINGS.language,
+          autoDetectLanguages,
           shortcut: shortcut ?? DEFAULT_SETTINGS.shortcut,
           cancelShortcut: cancelShortcut ?? DEFAULT_SETTINGS.cancelShortcut,
           microphoneDeviceId: microphoneDeviceId ?? DEFAULT_SETTINGS.microphoneDeviceId,
@@ -369,6 +383,15 @@ export function useSettings() {
       setSettings((prev) => ({ ...prev, language }));
     } catch (err) {
       console.error("Failed to save language:", err);
+    }
+  }, []);
+
+  const updateAutoDetectLanguages = useCallback(async (autoDetectLanguages: string[]) => {
+    try {
+      await store.set(STORE_KEYS.AUTO_DETECT_LANGUAGES, JSON.stringify(autoDetectLanguages));
+      setSettings((prev) => ({ ...prev, autoDetectLanguages }));
+    } catch (err) {
+      console.error("Failed to save auto-detect languages:", err);
     }
   }, []);
 
@@ -532,6 +555,7 @@ export function useSettings() {
     updateLlmProvider,
     updateLlmModel,
     updateLanguage,
+    updateAutoDetectLanguages,
     updateShortcut,
     updateCancelShortcut,
     updateMicrophoneDeviceId,

@@ -210,7 +210,19 @@ fn speech_start(samples: &[f32]) -> Option<usize> {
 
 /// Detected language code with its probability, or `None` when the clip is
 /// silent or the detector isn't confident.
-fn detect_language(engine: &mut Engine, samples: &[f32]) -> Option<(String, f32)> {
+///
+/// `allowed` restricts the choice to those ISO 639-1 codes (empty means any
+/// language). Whisper has no such parameter itself: its detection is one
+/// decoder step producing a softmax over all 99 language tokens, so we mask
+/// that distribution after the fact. With a restriction the probability is
+/// renormalised over the allowed set and the confidence floor is skipped,
+/// because a 30/20 split between two candidates is still a clear decision
+/// once the other 97 languages are off the table.
+fn detect_language(
+    engine: &mut Engine,
+    samples: &[f32],
+    allowed: &[String],
+) -> Option<(String, f32)> {
     let state = &mut engine.lang_state;
     let start = speech_start(samples)?;
     let window = (LANG_DETECT_WINDOW_SECS * TARGET_SAMPLE_RATE as f32) as usize;
@@ -228,7 +240,31 @@ fn detect_language(engine: &mut Engine, samples: &[f32]) -> Option<(String, f32)
             return None;
         }
     };
-    let prob = probs.get(id as usize).copied().unwrap_or(0.0);
+    let prob_of = |id: i32| probs.get(id as usize).copied().unwrap_or(0.0);
+
+    let allowed_ids: Vec<i32> = allowed
+        .iter()
+        .filter_map(|code| whisper_rs::get_lang_id(code))
+        .collect();
+    if !allowed_ids.is_empty() {
+        let best = allowed_ids
+            .iter()
+            .copied()
+            .max_by(|&a, &b| prob_of(a).total_cmp(&prob_of(b)))?;
+        let total: f32 = allowed_ids.iter().map(|&i| prob_of(i)).sum();
+        let prob = if total > 0.0 { prob_of(best) / total } else { 0.0 };
+        let code = whisper_rs::get_lang_str(best)?;
+        if best != id {
+            println!(
+                "[Whisper] Language detection picked {} over unlisted {}",
+                code,
+                whisper_rs::get_lang_str(id).unwrap_or("?")
+            );
+        }
+        return Some((code.to_string(), prob));
+    }
+
+    let prob = prob_of(id);
     let code = whisper_rs::get_lang_str(id)?;
     if prob < LANG_DETECT_MIN_PROB {
         println!(
@@ -240,11 +276,13 @@ fn detect_language(engine: &mut Engine, samples: &[f32]) -> Option<(String, f32)
     Some((code.to_string(), prob))
 }
 
-/// Transcribe 16 kHz mono samples. `language` is an ISO 639-1 code or "auto".
+/// Transcribe 16 kHz mono samples. `language` is an ISO 639-1 code or "auto";
+/// `allowed_languages` narrows "auto" to those codes (empty means any).
 pub fn transcribe(
     state: &WhisperState,
     samples: &[f32],
     language: &str,
+    allowed_languages: &[String],
     vocabulary_prompt: Option<&str>,
 ) -> Result<String, String> {
     let mut model_guard = state.lock_model();
@@ -260,7 +298,7 @@ pub fn transcribe(
 
     let resolved: String = if language == "auto" {
         let t = std::time::Instant::now();
-        match detect_language(engine, samples) {
+        match detect_language(engine, samples, allowed_languages) {
             Some((code, prob)) => {
                 println!(
                     "[Whisper] Detected language {} (p = {:.2}) in {} ms",
@@ -367,9 +405,9 @@ mod tests {
 
         let samples = crate::local_audio::read_wav_as_f32_16k(Path::new(&wav)).expect("wav");
         // warm-up so shader compilation isn't counted
-        transcribe(&state, &samples, &lang, None).expect("warm-up");
+        transcribe(&state, &samples, &lang, &[], None).expect("warm-up");
         let t1 = std::time::Instant::now();
-        let text = transcribe(&state, &samples, &lang, None).expect("transcribe");
+        let text = transcribe(&state, &samples, &lang, &[], None).expect("transcribe");
         println!(
             "transcribe: {:?} for {:.1}s audio\n>>> {}",
             t1.elapsed(),
@@ -424,11 +462,12 @@ mod tests {
             whisper_rs::get_lang_str(id).unwrap_or("?").to_string()
         });
         best("trimmed detect", &mut || {
-            detect_language(engine, &samples).map(|(c, _)| c).unwrap_or_default()
+            detect_language(engine, &samples, &[]).map(|(c, _)| c).unwrap_or_default()
         });
     }
 
-    /// Detection accuracy and cost over several clips.
+    /// Detection accuracy and cost over several clips. Set
+    /// DICTATO_TEST_ALLOWED="pl,en" to exercise the allowlist.
     /// DICTATO_WHISPER_DIR=... DICTATO_TEST_WAVS="a.wav:pl,b.wav:en" \
     /// cargo test whisper_language_detection -- --nocapture --ignored
     #[test]
@@ -436,6 +475,9 @@ mod tests {
     fn whisper_language_detection() {
         let dir = std::env::var("DICTATO_WHISPER_DIR").expect("DICTATO_WHISPER_DIR");
         let list = std::env::var("DICTATO_TEST_WAVS").expect("DICTATO_TEST_WAVS");
+        let allowed: Vec<String> = std::env::var("DICTATO_TEST_ALLOWED")
+            .map(|s| s.split(',').map(str::to_string).collect())
+            .unwrap_or_default();
         let state = WhisperState::default();
         load_model(&state, Path::new(&dir)).expect("load");
         let mut guard = state.lock_model();
@@ -446,7 +488,7 @@ mod tests {
             let (wav, expected) = entry.split_once(':').unwrap();
             let samples = crate::local_audio::read_wav_as_f32_16k(Path::new(wav)).expect("wav");
             let t = std::time::Instant::now();
-            let detected = detect_language(engine, &samples);
+            let detected = detect_language(engine, &samples, &allowed);
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             let name = Path::new(wav).file_name().unwrap().to_string_lossy();
             let ok = detected.as_ref().map(|(c, _)| c == expected).unwrap_or(false);

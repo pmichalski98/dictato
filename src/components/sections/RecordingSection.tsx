@@ -40,8 +40,12 @@ const SUPPORTED_LANGUAGES = [
   { code: "uk", name: "Ukrainian" },
 ] as const;
 
+/** Languages "Auto-detect" may be narrowed to (everything but "auto" itself). */
+const AUTO_DETECT_CANDIDATES = SUPPORTED_LANGUAGES.filter(({ code }) => code !== "auto");
+
 interface RecordingSectionProps {
   language: string;
+  autoDetectLanguages: string[];
   microphoneDeviceId: string;
   autoPaste: boolean;
   purePasteEnabled: boolean;
@@ -49,6 +53,7 @@ interface RecordingSectionProps {
   shortcut: string;
   cancelShortcut: string;
   onUpdateLanguage: (lang: string) => void;
+  onUpdateAutoDetectLanguages: (langs: string[]) => void;
   onUpdateMicrophoneDeviceId: (deviceId: string) => void;
   onUpdateAutoPaste: (enabled: boolean) => void;
   onUpdatePurePasteEnabled: (enabled: boolean) => void;
@@ -59,6 +64,7 @@ interface RecordingSectionProps {
 
 export function RecordingSection({
   language,
+  autoDetectLanguages,
   microphoneDeviceId,
   autoPaste,
   purePasteEnabled,
@@ -66,6 +72,7 @@ export function RecordingSection({
   shortcut,
   cancelShortcut,
   onUpdateLanguage,
+  onUpdateAutoDetectLanguages,
   onUpdateMicrophoneDeviceId,
   onUpdateAutoPaste,
   onUpdatePurePasteEnabled,
@@ -117,6 +124,16 @@ export function RecordingSection({
         .catch(() => setAccessibilityGranted(false));
     }
   }, [autoPaste, isMacOS]);
+
+  const toggleAutoDetectLanguage = useCallback(
+    (code: string, checked: boolean) => {
+      const next = checked
+        ? [...autoDetectLanguages, code]
+        : autoDetectLanguages.filter((c) => c !== code);
+      onUpdateAutoDetectLanguages(next);
+    },
+    [autoDetectLanguages, onUpdateAutoDetectLanguages]
+  );
 
   const handleAutoPasteChange = useCallback(
     async (enabled: boolean | "indeterminate") => {
@@ -278,6 +295,27 @@ export function RecordingSection({
               </option>
             ))}
           </Select>
+          {language === "auto" && (
+            <div className="space-y-1.5 pl-1 pt-1">
+              <p className="text-[11px] text-muted-foreground">
+                Limit detection to these languages (none checked = any language)
+              </p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {AUTO_DETECT_CANDIDATES.map(({ code, name }) => (
+                  <label
+                    key={code}
+                    className="flex items-center gap-2 cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={autoDetectLanguages.includes(code)}
+                      onCheckedChange={(checked) => toggleAutoDetectLanguage(code, checked)}
+                    />
+                    <span className="text-[12px] text-muted-foreground">{name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Microphone Device */}

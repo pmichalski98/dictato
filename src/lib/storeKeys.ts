@@ -24,6 +24,7 @@ export const STORE_KEYS = {
   ANTHROPIC_MODEL: "anthropicModel",
   LLM_PROVIDER: "llmProvider",
   LANGUAGE: "language",
+  AUTO_DETECT_LANGUAGES: "autoDetectLanguages",
   CANCEL_SHORTCUT: "cancelShortcut",
   SHORTCUT: "shortcut",
   AUTO_PASTE: "autoPaste",
