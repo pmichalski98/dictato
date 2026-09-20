@@ -9,7 +9,11 @@ function App() {
     currentVersion,
     newVersion,
     isDownloading,
-    downloadAndInstall,
+    isDownloaded,
+    isInstalling,
+    downloadProgress,
+    error,
+    installAndRestart,
     openDialog,
     dismiss,
   } = useUpdateCheck();
@@ -26,7 +30,11 @@ function App() {
           currentVersion={currentVersion}
           newVersion={newVersion}
           isDownloading={isDownloading}
-          onUpdate={downloadAndInstall}
+          isDownloaded={isDownloaded}
+          isInstalling={isInstalling}
+          downloadProgress={downloadProgress}
+          error={error}
+          onUpdate={installAndRestart}
           onDismiss={dismiss}
         />
       )}

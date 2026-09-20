@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -1958,12 +1958,14 @@ fn hide_main_window(app: &AppHandle) {
     }
 }
 
-fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let icon = match app.default_window_icon() {
-        Some(icon) => icon.clone(),
-        None => return Ok(()),
-    };
+const TRAY_ID: &str = "main";
 
+/// Tray menu; `update_version` adds an "Update to vX" entry at the top so a
+/// pending update is visible without opening Settings.
+fn build_tray_menu(
+    app: &AppHandle,
+    update_version: Option<&str>,
+) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let cleaning_item = MenuItem::with_id(
         app,
@@ -1973,9 +1975,44 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         None::<&str>,
     )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &cleaning_item, &quit_item])?;
 
-    let _ = TrayIconBuilder::new()
+    match update_version {
+        Some(version) => {
+            let update_item = MenuItem::with_id(
+                app,
+                "update",
+                format!("Update to v{}...", version),
+                true,
+                None::<&str>,
+            )?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            Menu::with_items(
+                app,
+                &[&update_item, &separator, &show_item, &cleaning_item, &quit_item],
+            )
+        }
+        None => Menu::with_items(app, &[&show_item, &cleaning_item, &quit_item]),
+    }
+}
+
+/// Frontend found an update: surface it in the tray menu.
+#[tauri::command]
+fn set_update_available(app: AppHandle, version: String) -> Result<(), String> {
+    println!("[Updater] Update to v{} available, adding tray item", version);
+    let tray = app.tray_by_id(TRAY_ID).ok_or("Tray icon not found")?;
+    let menu = build_tray_menu(&app, Some(&version)).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())
+}
+
+fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let icon = match app.default_window_icon() {
+        Some(icon) => icon.clone(),
+        None => return Ok(()),
+    };
+
+    let menu = build_tray_menu(app, None)?;
+
+    let _ = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Dictato")
         .menu(&menu)
@@ -1993,6 +2030,10 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 show_main_window(app);
+            }
+            "update" => {
+                show_main_window(app);
+                app.emit("open-update-dialog", ()).ok();
             }
             "cleaning_mode" => {
                 let app_handle = app.clone();
@@ -2079,6 +2120,7 @@ pub fn run() {
             engage_cleaning_mode,
             get_cleaning_mode_state,
             close_cleaning_overlay,
+            set_update_available,
         ])
         .setup(|app| {
             // Hide app from macOS dock (stealth mode - tray icon only)
